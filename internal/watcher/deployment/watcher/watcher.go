@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	common "github.com/massix/chaos-monkey/internal/watcher"
 	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	scalev1 "k8s.io/api/autoscaling/v1"
@@ -15,15 +16,15 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-type DeploymentChaos interface {
-	Watcher
+type Interface interface {
+	common.Watcher
 	SetMinReplicas(int)
 	SetMaxReplicas(int)
 	SetTimeout(time.Duration)
 	SetEnabled(bool)
 }
 
-type deploymentChaos struct {
+type DeploymentChaos struct {
 	deployment *appsv1.Deployment
 	running    bool
 	typedappsv1.DeploymentInterface
@@ -39,60 +40,67 @@ type deploymentChaos struct {
 }
 
 // SetMaxReplicas implements DeploymentChaos.
-func (d *deploymentChaos) SetMaxReplicas(m int) {
+func (d *DeploymentChaos) SetMaxReplicas(m int) {
 	d.mutex.Lock()
 	d.maxReplicas = m
 	d.mutex.Unlock()
 }
 
 // SetMinReplicas implements DeploymentChaos.
-func (d *deploymentChaos) SetMinReplicas(m int) {
+func (d *DeploymentChaos) SetMinReplicas(m int) {
 	d.mutex.Lock()
 	d.minReplicas = m
 	d.mutex.Unlock()
 }
 
 // SetTimeout implements DeploymentChaos.
-func (d *deploymentChaos) SetTimeout(td time.Duration) {
+func (d *DeploymentChaos) SetTimeout(td time.Duration) {
 	d.mutex.Lock()
 	d.timeout = td
 	d.mutex.Unlock()
 }
 
-func (d *deploymentChaos) SetEnabled(v bool) {
+func (d *DeploymentChaos) SetEnabled(v bool) {
 	d.mutex.Lock()
 	d.enabled = v
 	d.mutex.Unlock()
 }
 
 // IsRunning implements DeploymentChaos.
-func (d *deploymentChaos) IsRunning() bool {
+func (d *DeploymentChaos) IsRunning() bool {
 	return d.running
 }
 
-func (d *deploymentChaos) scaleDeployment(newReplicas int) error {
+func (d *DeploymentChaos) scaleDeployment(newReplicas int) error {
 	logrus.Infof("Scaling deployment %s to %d replicas", d.deployment.Name, newReplicas)
-	_, err := d.UpdateScale(context.Background(), d.deployment.Name, &scalev1.Scale{
-		ObjectMeta: d.deployment.ObjectMeta,
+
+	res, err := d.UpdateScale(context.Background(), d.deployment.Name, &scalev1.Scale{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      d.deployment.Name,
+			Namespace: d.deployment.Namespace,
+		},
 		Spec: scalev1.ScaleSpec{
 			Replicas: int32(newReplicas),
 		},
 	}, v1.UpdateOptions{})
 
+	logrus.Debugf("Successfully scaled to %d replicas", res.Spec.Replicas)
+
 	return err
 }
 
 // Start implements DeploymentChaos.
-func (d *deploymentChaos) Start(ctx context.Context) error {
+func (d *DeploymentChaos) Start(ctx context.Context) error {
 	d.running = true
 	timer := time.NewTimer(d.timeout)
 	defer timer.Stop()
 
+	logrus.Infof("Chaos Monkey for %s starting", d.deployment.Name)
 	for d.running {
 		select {
 		case <-timer.C:
 			if d.enabled {
-				newReplicas := d.rng.Intn(d.maxReplicas) + d.minReplicas
+				newReplicas := max(d.rng.Intn(d.maxReplicas+1), d.minReplicas)
 				if err := d.scaleDeployment(newReplicas); err != nil {
 					logrus.Warnf("Error while scaling deployment: %s", err)
 				}
@@ -116,7 +124,7 @@ func (d *deploymentChaos) Start(ctx context.Context) error {
 }
 
 // Stop implements DeploymentChaos.
-func (d *deploymentChaos) Stop() error {
+func (d *DeploymentChaos) Stop() error {
 	d.mutex.Lock()
 	d.running = false
 	d.mutex.Unlock()
@@ -130,9 +138,7 @@ func NewDeploymentChaos(
 	minReplicas int,
 	maxReplicas int,
 	duration time.Duration,
-) DeploymentChaos {
-	logrus.Infof("NewDeploymentChaos: %s", forDeployment.Name)
-
+) Interface {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		panic(err)
@@ -147,7 +153,7 @@ func NewDeploymentChaos(
 		logrus.Warnf("Deployment %s does not have replicas set, defaulting to %d", forDeployment.Name, sr)
 	}
 
-	return &deploymentChaos{
+	return &DeploymentChaos{
 		DeploymentInterface: clientset,
 
 		deployment:       forDeployment,

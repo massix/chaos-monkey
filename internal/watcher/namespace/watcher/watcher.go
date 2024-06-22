@@ -7,6 +7,10 @@ import (
 	"sync"
 	"time"
 
+	common "github.com/massix/chaos-monkey/internal/watcher"
+	crdfactory "github.com/massix/chaos-monkey/internal/watcher/crd/factory"
+	crdwatcher "github.com/massix/chaos-monkey/internal/watcher/crd/watcher"
+	deploymentfactory "github.com/massix/chaos-monkey/internal/watcher/deployment/factory"
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,18 +22,24 @@ import (
 	"k8s.io/client-go/tools/record"
 )
 
-type namespaceWatcher struct {
-	kubernetes.Interface
+type Interface interface {
+	common.Watcher
+}
+
+type NamespaceWatcher struct {
+	typedcorev1.NamespaceInterface
 
 	// Keep track of all the currently deployed watchers
-	namespaces    map[string]Watcher
+	namespaces    map[string]crdwatcher.Interface
 	rootNamespace string
+	crdFactory    crdfactory.Interface
+	depFactory    deploymentfactory.Interface
 
 	running     bool
 	broadcaster record.EventRecorderLogger
 }
 
-func NewNamespaceWatcher(rootNamespace string) Watcher {
+func NewNamespaceWatcher(rootNamespace string, crdFactory crdfactory.Interface, depFactory deploymentfactory.Interface) Interface {
 	logrus.Info("Creating namespace watcher")
 
 	cfg, err := rest.InClusterConfig()
@@ -49,36 +59,38 @@ func NewNamespaceWatcher(rootNamespace string) Watcher {
 
 	recorder := bc.NewRecorder(scheme.Scheme, v1.EventSource{Component: "chaos-monkey"})
 
-	return &namespaceWatcher{
-		Interface:     clientset,
-		namespaces:    map[string]Watcher{},
-		running:       false,
-		rootNamespace: rootNamespace,
-		broadcaster:   recorder,
+	return &NamespaceWatcher{
+		NamespaceInterface: clientset.CoreV1().Namespaces(),
+		namespaces:         map[string]crdwatcher.Interface{},
+		running:            false,
+		rootNamespace:      rootNamespace,
+		broadcaster:        recorder,
+		crdFactory:         crdFactory,
+		depFactory:         depFactory,
 	}
 }
 
-func (c *namespaceWatcher) IsRunning() bool {
+func (c *NamespaceWatcher) IsRunning() bool {
 	return c.running
 }
 
-func (c *namespaceWatcher) Stop() error {
+func (c *NamespaceWatcher) Stop() error {
 	c.running = false
 	return nil
 }
 
-func (c *namespaceWatcher) addWatcherForNamespace(namespace string) error {
+func (c *NamespaceWatcher) addWatcherForNamespace(namespace string) error {
 	logrus.Infof("Adding watcher for namespace %s", namespace)
 	if _, ok := c.namespaces[namespace]; ok {
 		return fmt.Errorf("Watcher for namespace %s already exists", namespace)
 	}
 
-	c.namespaces[namespace] = NewCrdWatcher(namespace)
+	c.namespaces[namespace] = c.crdFactory.New(namespace)
 
 	return nil
 }
 
-func (c *namespaceWatcher) removeWatcherForNamespace(namespace string) error {
+func (c *NamespaceWatcher) removeWatcherForNamespace(namespace string) error {
 	var err error
 
 	if w, ok := c.namespaces[namespace]; ok {
@@ -90,9 +102,9 @@ func (c *namespaceWatcher) removeWatcherForNamespace(namespace string) error {
 	return err
 }
 
-func (c *namespaceWatcher) Start(ctx context.Context) error {
+func (c *NamespaceWatcher) Start(ctx context.Context) error {
 	logrus.Info("Starting namespace watcher")
-	w, err := c.CoreV1().Namespaces().Watch(ctx, metav1.ListOptions{})
+	w, err := c.Watch(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}

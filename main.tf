@@ -16,9 +16,6 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~>2.31.0"
     }
-    # We use this only for the kubectl_manifest, apparently there is a known
-    # bug in `kubernetes_manifest' which prevents us from being able to recreate
-    # the cluster. Thanks gavin!
     kubectl = {
       source  = "alekc/kubectl"
       version = "~>2.0.4"

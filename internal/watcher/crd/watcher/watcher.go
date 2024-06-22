@@ -9,6 +9,9 @@ import (
 	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned/scheme"
 	cmtyped "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1alpha1"
 	"github.com/massix/chaos-monkey/internal/apis/v1alpha1"
+	common "github.com/massix/chaos-monkey/internal/watcher"
+	deploymentfactory "github.com/massix/chaos-monkey/internal/watcher/deployment/factory"
+	deploymentwatcher "github.com/massix/chaos-monkey/internal/watcher/deployment/watcher"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,28 +23,33 @@ import (
 	"k8s.io/client-go/tools/record"
 )
 
-type crdWatcher struct {
+type Interface interface {
+	common.Watcher
+}
+
+type CRDWatcher struct {
 	cmtyped.ChaosMonkeyConfigurationInterface
 	appsv1.DeploymentInterface
 
+	factory   deploymentfactory.Interface
 	namespace string
 	running   bool
+	bc        record.EventRecorderLogger
 
-	chaosMonkeys map[string]DeploymentChaos
-	bc           record.EventRecorderLogger
+	chaosMonkeys map[string]deploymentwatcher.Interface
 }
 
-func (c *crdWatcher) Stop() error {
+func (c *CRDWatcher) Stop() error {
 	c.running = false
 	return nil
 }
 
-func (c *crdWatcher) IsRunning() bool {
+func (c *CRDWatcher) IsRunning() bool {
 	return c.running
 }
 
 // Start implements Watcher.
-func (c *crdWatcher) Start(ctx context.Context) error {
+func (c *CRDWatcher) Start(ctx context.Context) error {
 	var err error
 	var wg sync.WaitGroup
 
@@ -87,7 +95,7 @@ func (c *crdWatcher) Start(ctx context.Context) error {
 					parsedDuration = time.Duration(30 * time.Second)
 				}
 
-				dc := NewDeploymentChaos(dep, cmc.Spec.Enabled, cmc.Spec.MinReplicas, cmc.Spec.MaxReplicas, parsedDuration)
+				dc := c.factory.New(dep, cmc.Spec.Enabled, cmc.Spec.MinReplicas, cmc.Spec.MaxReplicas, parsedDuration)
 				c.chaosMonkeys[cmc.Name] = dc
 				wg.Add(1)
 				go func() {
@@ -159,7 +167,7 @@ func (c *crdWatcher) Start(ctx context.Context) error {
 	return err
 }
 
-func NewCrdWatcher(forNamespace string) Watcher {
+func NewCrdWatcher(forNamespace string, factory deploymentfactory.Interface) common.Watcher {
 	logrus.Infof("Creating new CRD watcher for %s", forNamespace)
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -178,14 +186,16 @@ func NewCrdWatcher(forNamespace string) Watcher {
 	})
 	recorder := bc.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "chaos-monkey"})
 
-	return &crdWatcher{
+	return &CRDWatcher{
 		ChaosMonkeyConfigurationInterface: cmcset,
 
 		DeploymentInterface: clientset,
 
+		factory: factory,
+
 		namespace:    forNamespace,
 		running:      false,
-		chaosMonkeys: map[string]DeploymentChaos{},
+		chaosMonkeys: map[string]deploymentwatcher.Interface{},
 		bc:           recorder,
 	}
 }

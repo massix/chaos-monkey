@@ -7,7 +7,9 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/massix/chaos-monkey/internal/watcher"
+	crdfactory "github.com/massix/chaos-monkey/internal/watcher/crd/factory"
+	depfactory "github.com/massix/chaos-monkey/internal/watcher/deployment/factory"
+	nsfactory "github.com/massix/chaos-monkey/internal/watcher/namespace/factory"
 	"github.com/sirupsen/logrus"
 )
 
@@ -24,8 +26,12 @@ func main() {
 	namespace := string(bytes)
 	logrus.Info("Using namespace: " + namespace)
 
+	depFactory := depfactory.New()
+	crdFactory := crdfactory.New(depFactory)
+	nsFactory := nsfactory.New(crdFactory, depFactory)
+
 	wg.Add(1)
-	cl := watcher.NewNamespaceWatcher(namespace)
+	cl := nsFactory.New(namespace)
 
 	go func() {
 		if err := cl.Start(ctx); err != nil {

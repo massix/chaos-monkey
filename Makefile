@@ -19,6 +19,7 @@ test:
 clean:
 	$(TERRAFORM) destroy --auto-approve
 	rm -rf ./bin
+	rm *-cluster-config
 
 cluster-test: bin/$(APPNAME)
 	$(TERRAFORM) apply --auto-approve

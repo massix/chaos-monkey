@@ -1,0 +1,12 @@
+{
+  "lspconfig": {
+    "gopls": {
+      "gopls": {
+        "analyses": {
+          "staticcheck": true,
+          "fieldalignment": true
+        }
+      }
+    }
+  }
+}

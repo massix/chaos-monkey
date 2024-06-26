@@ -14,7 +14,10 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+var Version string
+
 func main() {
+	logrus.Infof("Starting Chaos-Monkey version: %s", Version)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 

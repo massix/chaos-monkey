@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
+	"github.com/massix/chaos-monkey/internal/configuration"
 	"github.com/massix/chaos-monkey/internal/watcher"
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/kubernetes"
@@ -17,6 +18,12 @@ import (
 var Version string
 
 func main() {
+	// Get the LogLevel from the environment variable
+	ll, err := configuration.FromEnvironment()
+	if err != nil {
+		logrus.SetLevel(ll.LogrusLevel())
+	}
+
 	logrus.Infof("Starting Chaos-Monkey version: %s", Version)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup

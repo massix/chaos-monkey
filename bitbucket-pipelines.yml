@@ -27,10 +27,10 @@ pipelines:
                 services:
                   - docker
                 script:
+                  - apk add --no-cache make
                   - echo "${DOCKER_REGISTRY_PASSWORD}" | docker login -u "${DOCKER_REGISTRY_USERNAME}" "${DOCKER_REGISTRY_URL}" --password-stdin
                   - export DOCKER_BUILDKIT=0
-                  - export IMAGE="${DOCKER_REGISTRY_URL}/arnal/chaos-monkey"
-                  - export TAG="latest"
-                  - docker build -t "${IMAGE}:${TAG}" -f Dockerfile .
-                  - docker push "${IMAGE}:${TAG}"
+                  - export IMAGE="${DOCKER_REGISTRY_URL}/external/chaos-monkey"
+                  - make docker
+                  - docker push $(make image-version)
           trigger: automatic

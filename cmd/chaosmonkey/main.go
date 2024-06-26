@@ -7,15 +7,16 @@ import (
 	"sync"
 	"syscall"
 
-	crdfactory "github.com/massix/chaos-monkey/internal/watcher/crd/factory"
-	depfactory "github.com/massix/chaos-monkey/internal/watcher/deployment/factory"
-	nsfactory "github.com/massix/chaos-monkey/internal/watcher/namespace/factory"
+	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
+	"github.com/massix/chaos-monkey/internal/watcher"
 	"github.com/sirupsen/logrus"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 func main() {
-	var wg sync.WaitGroup
 	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
 
 	logrus.Info("Getting information from Kubernetes")
 	bytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -26,24 +27,27 @@ func main() {
 	namespace := string(bytes)
 	logrus.Info("Using namespace: " + namespace)
 
-	depFactory := depfactory.New()
-	crdFactory := crdfactory.New(depFactory)
-	nsFactory := nsfactory.New(crdFactory, depFactory)
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		panic(err)
+	}
 
-	wg.Add(1)
-	cl := nsFactory.New(namespace)
+	clientset := kubernetes.NewForConfigOrDie(cfg)
+	cmcClientset := versioned.NewForConfigOrDie(cfg)
 
-	go func() {
-		if err := cl.Start(ctx); err != nil {
-			logrus.Warnf("Error from namespace watcher: %s", err)
-		}
-
-		wg.Done()
-	}()
+	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace)
 
 	// Hook signals
 	s := make(chan os.Signal, 1)
 	signal.Notify(s, syscall.SIGINT, syscall.SIGTERM, syscall.SIGABRT)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := nsWatcher.Start(ctx); err != nil {
+			logrus.Errorf("Error from namespace watcher: %s", err)
+		}
+	}()
 
 	// Wait for a signal to arrive
 	<-s

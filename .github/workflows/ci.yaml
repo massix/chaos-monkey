@@ -1,0 +1,40 @@
+name: CI
+on: [push]
+jobs:
+  build:
+    name: Build and Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+      - run: make all
+      - run: make test
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+      - uses: azure/setup-kubectl@v3
+        with:
+          version: "v1.30.1"
+      - uses: engineerd/setup-kind@v0.5.0
+        with:
+          skipClusterCreation: true
+      - run: terraform init
+      - run: make cluster-test
+      - run: sleep 30
+      - run: kubectl get ns | grep target
+      - run: kubectl get ns | grep chaosmonkey
+      - run: kubectl -n chaosmonkey get pods | grep chaos-monkey
+      - run: kubectl -n target get deployments | grep nginx
+      - run: kubectl -n target get cmc | grep chaosmonkey-nginx
+      - run: kubectl -n target get events | grep ChaosMonkey
+      - run: make clean

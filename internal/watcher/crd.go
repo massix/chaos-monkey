@@ -40,6 +40,7 @@ var _ = (Watcher)((*CrdWatcher)(nil))
 func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interface, recorder record.EventRecorderLogger, namespace string) Watcher {
 	// Build my own recorder here
 	if recorder == nil {
+		logrus.Debug("No recorder provided, using default")
 		broadcaster := record.NewBroadcaster()
 		broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events(namespace)})
 		recorder = broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "chaos-monkey"})
@@ -69,6 +70,7 @@ func (c *CrdWatcher) IsRunning() bool {
 
 // Start implements Watcher.
 func (c *CrdWatcher) Start(ctx context.Context) error {
+	logrus.Infof("Starting CRD watcher in namespace %s", c.Namespace)
 	var err error
 	var wg sync.WaitGroup
 
@@ -115,6 +117,7 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 					logrus.Errorf("Error while trying to start watcher: %s", err)
 				}
 
+				logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Started", "Watcher started for deployment %s", dep.Name)
 
 			case watch.Modified:
@@ -124,6 +127,7 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 					logrus.Errorf("Error while trying to modify watcher: %s", err)
 				}
 
+				logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Modified", "Watcher modified for deployment %s", cmc.Spec.DeploymentName)
 
 			case watch.Deleted:
@@ -133,6 +137,7 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 					logrus.Errorf("Error while trying to delete watcher: %s", err)
 				}
 
+				logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Deleted", "Watcher deleted for deployment %s", cmc.Spec.DeploymentName)
 			}
 		case <-ctx.Done():
@@ -168,6 +173,8 @@ func (c *CrdWatcher) Stop() error {
 	defer c.Mutex.Unlock()
 
 	c.Running = false
+
+	logrus.Debugf("Stopping CRD watcher for %s", c.Namespace)
 	return nil
 }
 
@@ -198,11 +205,13 @@ func (c *CrdWatcher) addWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration, dep *api
 	newWatcher := DefaultDeploymentFactory(c.Client, nil, dep)
 
 	// Configure it
+	logrus.Debugf("Configuring watcher with %+v", cmc.Spec)
 	newWatcher.SetEnabled(cmc.Spec.Enabled)
 	newWatcher.SetMinReplicas(cmc.Spec.MinReplicas)
 	newWatcher.SetMaxReplicas(cmc.Spec.MaxReplicas)
 	newWatcher.SetTimeout(parsedDuration)
 
+	logrus.Debug("Adding watcher to map")
 	c.DeploymentWatchers[dep.Name] = newWatcher
 
 	return nil
@@ -220,6 +229,7 @@ func (c *CrdWatcher) startWatcher(ctx context.Context, forDeployment string, wg 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		logrus.Debugf("Starting watcher for %s", forDeployment)
 		if err := watcher.Start(ctx); err != nil {
 			logrus.Errorf("Error while starting watcher: %s", err)
 		}
@@ -237,6 +247,7 @@ func (c *CrdWatcher) modifyWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration) error
 		return fmt.Errorf("Watcher for deployment %s does not exist", cmc.Spec.DeploymentName)
 	}
 
+	logrus.Debugf("Reconfiguring watcher with %+v", cmc.Spec)
 	watcher.SetEnabled(cmc.Spec.Enabled)
 	watcher.SetMinReplicas(cmc.Spec.MinReplicas)
 	watcher.SetMaxReplicas(cmc.Spec.MaxReplicas)
@@ -254,6 +265,8 @@ func (c *CrdWatcher) modifyWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration) error
 func (c *CrdWatcher) deleteWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration) error {
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
+
+	logrus.Infof("Deleting watcher for %s", cmc.Spec.DeploymentName)
 
 	if watcher, ok := c.DeploymentWatchers[cmc.Spec.DeploymentName]; ok {
 		if err := watcher.Stop(); err != nil {

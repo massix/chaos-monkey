@@ -100,6 +100,7 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 					continue
 				}
 
+				logrus.Debug("All is good! Sending event.")
 				n.startCrdWatcher(ctx, ns.Name, &wg)
 				n.Eventf(ns, "Normal", "Added", "CRD Watcher added for %s", ns.Name)
 
@@ -109,6 +110,7 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 					logrus.Warnf("Error while trying to remove CRD watcher: %s", err)
 				}
 
+				logrus.Debug("All is good! Sending event.")
 				n.Eventf(ns, "Normal", "Deleted", "CRD Watcher deleted for %s", ns.Name)
 			}
 
@@ -144,6 +146,8 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 func (n *NamespaceWatcher) Stop() error {
 	n.Mutex.Lock()
 	defer n.Mutex.Unlock()
+
+	logrus.Debugf("Stopping namespace watcher for %s", n.RootNamespace)
 
 	n.Running = false
 	return nil
@@ -211,6 +215,8 @@ func (n *NamespaceWatcher) startCrdWatcher(ctx context.Context, namespace string
 
 	go func() {
 		defer wg.Done()
+
+		logrus.Debugf("Starting CRD Watcher for namespace %s", namespace)
 
 		if watcher == nil {
 			logrus.Warnf("No watcher found for namespace %s", namespace)

@@ -21,6 +21,8 @@ func main() {
 	// Get the LogLevel from the environment variable
 	ll, err := configuration.FromEnvironment()
 	if err != nil {
+		logrus.Warnf("No loglevel provided, using default: %s", logrus.GetLevel())
+	} else {
 		logrus.SetLevel(ll.LogrusLevel())
 	}
 

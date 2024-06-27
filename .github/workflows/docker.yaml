@@ -1,0 +1,22 @@
+name: Deploy on DockerHub
+on:
+  push:
+    tags: ['v*']
+jobs:
+  deploy:
+    name: Deploy on DockerHub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
+          password: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
+      - run: |
+          export IMAGE="${{ secrets.DOCKER_REGISTRY_USERNAME }}/$(make image-name)"
+          make docker
+          docker push "${IMAGE}:$(make image-tag)"
+          docker tag "${IMAGE}:$(make image-tag)" "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"

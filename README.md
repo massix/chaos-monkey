@@ -81,6 +81,88 @@ validations done by Kubernetes itself, which are embedded in the
 [OpenAPI Schema](./crds/chaosmonkey-configuration.yaml) and some other validations
 are done in the code.
 
+## Deployment inside a Kubernetes Cluster
+In order to be able to deploy the ChaosMonkey inside a Kubernetes cluster you **must**
+first create a [ServiceAccount](https://kubernetes.io/docs/concepts/security/service-accounts/),
+followed by a [ClusterRole](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+and bind the two together with a [ClusterRoleBinding](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#rolebinding-and-clusterrolebinding).
+
+After that you need to inject the CRD contained in this repository:
+
+    kubectl apply -f ./crds/chaosmonkey-configuration.yaml
+
+Then you can create a classic [Deployment](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/),
+just remember to use your newly created ServiceAccount.
+
+Following is an example of the manifests you *should* create for the cluster:
+
+```yaml
+kind: Namespace
+apiVersion: v1
+metadata:
+  name: chaosmonkey
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: chaosmonkey
+  namespace: chaosmonkey
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: chaosmonkey
+rules:
+  - apiGroups: ["*"]
+    resources: ["namespaces"]
+    verbs: ["watch"]
+  - apiGroups: ["*"]
+    resources: ["deployments"]
+    verbs: ["patch", "get", "scale", "update"]
+  - apiGroups: ["*"]
+    resources: ["chaosmonkeyconfigurations"]
+    verbs: ["list", "patch", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["update"]
+  - apiGroups: ["*"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: chaosmonkey-binding
+subjects:
+  - kind: ServiceAccount
+    name: chaosmonkey
+    namespace: chaosmonkey
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: chaosmonkey
+---
+kind: Deployment
+apiGroup: apps/v1
+metadata:
+  name: chaosmonkey
+  namespace: chaosmonkey
+spec:
+  # some fields omitted for clarity
+  template:
+    spec:
+      serviceAccountName: chaosmonkey
+```
+
+## Configuration
+The only configuration possible for the ChaosMonkey is setting the minimum log level,
+this is done by setting the environment variable `CHAOSMONKEY_LOGLEVEL` to one of the
+following values: `trace`, `debug`, `info`, `warn`, `error`, `critical` or `panic`.
+
+The value is not case-sensitive.
+
+Invalid or empty values will make ChaosMonkey default to the `info` level.
+
 ## Development
 All contributions are welcome, of course. Feel free to open an issue or submit a
 pull request. If you want to develop and test locally, you need to install:

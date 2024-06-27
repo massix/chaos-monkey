@@ -35,6 +35,7 @@ type DeploymentWatcher struct {
 func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) DeploymentWatcherI {
 	// Build my own recorder here
 	if recorder == nil {
+		logrus.Debug("No recorder provided, using default")
 		broadcaster := record.NewBroadcaster()
 		broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events(deployment.Namespace)})
 		recorder = broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "chaos-monkey"})
@@ -111,12 +112,14 @@ func (d *DeploymentWatcher) Start(ctx context.Context) error {
 			if !d.isEnabled() {
 				logrus.Debug("Skipping scaling")
 			} else {
-				logrus.Infof("Scaling deployment %s", d.OriginalDeployment.Name)
+				logrus.Debugf("Scaling deployment %s", d.OriginalDeployment.Name)
 				newReplicas := max(rng.Intn(d.getMaxReplicas()+1), d.getMinReplicas())
 				if err := d.scaleDeployment(newReplicas); err != nil {
 					logrus.Errorf("Error while scaling deployment: %s", err)
 					consecutiveErrors++
+					logrus.Debugf("Consecutive errors: %d", consecutiveErrors)
 				} else {
+					logrus.Debug("Resetting consecutive errors")
 					consecutiveErrors = 0
 				}
 			}
@@ -126,10 +129,12 @@ func (d *DeploymentWatcher) Start(ctx context.Context) error {
 		}
 
 		if consecutiveErrors >= 5 {
+			logrus.Error("Too many consecutive errors, stopping deployment watcher")
 			err1 := d.Stop()
 			return errors.Join(err1, errors.New("too many consecutive errors"))
 		}
 
+		logrus.Debugf("Resetting timer to %s", d.getTimeout())
 		timer.Reset(d.getTimeout())
 	}
 
@@ -137,7 +142,7 @@ func (d *DeploymentWatcher) Start(ctx context.Context) error {
 }
 
 func (d *DeploymentWatcher) scaleDeployment(newReplicas int) error {
-	logrus.Debugf("Scaling deployment %s to %d replicas", d.getOriginalDeployment().Name, newReplicas)
+	logrus.Infof("Scaling deployment %s to %d replicas", d.getOriginalDeployment().Name, newReplicas)
 
 	res, err := d.UpdateScale(context.Background(), d.getOriginalDeployment().Name, &scalev1.Scale{
 		ObjectMeta: metav1.ObjectMeta{
@@ -150,7 +155,7 @@ func (d *DeploymentWatcher) scaleDeployment(newReplicas int) error {
 	}, metav1.UpdateOptions{})
 
 	if err == nil {
-		logrus.Debugf("Successfully scaled %s to %d replicas", res.Name, res.Spec.Replicas)
+		logrus.Debugf("Successfully scaled %s to %d replicas, publishing event", res.Name, res.Spec.Replicas)
 		d.Eventf(d.getOriginalDeployment(), corev1.EventTypeNormal, "ChaosMonkey", "Converted to %d replicas", res.Spec.Replicas)
 	}
 
@@ -203,6 +208,8 @@ func (d *DeploymentWatcher) setRunning(v bool) {
 func (d *DeploymentWatcher) Stop() error {
 	d.Mutex.Lock()
 	defer d.Mutex.Unlock()
+
+	logrus.Debugf("Stopping deployment watcher for %s", d.OriginalDeployment.Name)
 
 	d.Running = false
 	return nil

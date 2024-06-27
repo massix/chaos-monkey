@@ -2,6 +2,11 @@ package configuration
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"slices"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 )
@@ -10,31 +15,40 @@ type InvalidLogrusLevel struct {
 	providedLevel string
 }
 
-func (i InvalidLogrusLevel) Error() string {
-	return "Invalid logrus level: " + i.providedLevel
+func (i *InvalidLogrusLevel) Error() string {
+	return fmt.Sprintf("Invalid logrus level: %s", i.providedLevel)
 }
 
 type LogrusLevel string
 
-func NewLogrusLevel(level string) (LogrusLevel, error) {
-	switch level {
-	case "panic":
-		fallthrough
-	case "fatal":
-		fallthrough
-	case "error":
-		fallthrough
-	case "warn":
-		fallthrough
-	case "info":
-		fallthrough
-	case "debug":
-		fallthrough
-	case "trace":
-		return LogrusLevel(level), nil
-	default:
-		return "", &InvalidLogrusLevel{level}
+func FromEnvironment() (LogrusLevel, error) {
+	if val, ok := os.LookupEnv("CHAOSMONKEY_LOGLEVEL"); ok {
+		if newLevel, err := NewLogrusLevel(strings.ToLower(val)); err == nil {
+			return newLevel, nil
+		} else {
+			return "", err
+		}
 	}
+
+	return "", errors.New("No environment variable for configuring the log level found.")
+}
+
+func NewLogrusLevel(level string) (LogrusLevel, error) {
+	validLevels := []string{
+		"panic",
+		"fatal",
+		"error",
+		"warn",
+		"info",
+		"debug",
+		"trace",
+	}
+
+	if slices.Contains(validLevels, level) {
+		return LogrusLevel(level), nil
+	}
+
+	return "", &InvalidLogrusLevel{level}
 }
 
 func (l LogrusLevel) LogrusLevel() logrus.Level {
@@ -73,12 +87,4 @@ func (l *LogrusLevel) UnmarshalJSON(b []byte) error {
 	*l = newVal
 
 	return nil
-}
-
-type Configuration struct {
-	KubernetesConfiguration *KubernetesConfiguration `toml:"kubernetes"`
-}
-
-type KubernetesConfiguration struct {
-	Namespace string `toml:"namespace"`
 }

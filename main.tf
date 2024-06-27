@@ -209,6 +209,10 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
           name              = "chaos-monkey"
           image             = docker_image.chaos-monkey-image.name
           image_pull_policy = "Never"
+          env {
+            name  = "CHAOSMONKEY_LOGLEVEL"
+            value = "debug"
+          }
         }
       }
     }

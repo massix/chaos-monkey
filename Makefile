@@ -21,6 +21,12 @@ docker:
 image-version:
 	@echo $(IMAGE):$(TAG)
 
+image-name:
+	@echo $(IMAGE)
+
+image-tag:
+	@echo $(TAG)
+
 test:
 	$(GO) vet ./...
 	CGO_ENABLED=1 $(GO) test -v -race ./...

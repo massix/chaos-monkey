@@ -136,6 +136,12 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 			logrus.Info("Pod Watcher context done")
 			err = p.Stop()
 		case <-timer.C:
+			if !p.isEnabled() {
+				logrus.Debug("CRD not enabled, refusing to disrupt pods")
+				timer.Reset(p.getTimeout())
+				continue
+			}
+
 			logrus.Infof("Disrupting random pod from namespace %s", p.Namespace)
 			if randomPod, err := p.getRandomPod(); err != nil {
 				logrus.Warnf("Warning: %s", err)
@@ -167,6 +173,13 @@ func (p *PodWatcher) Stop() error {
 
 	p.Running = false
 	return nil
+}
+
+func (p *PodWatcher) isEnabled() bool {
+	p.Mutex.Lock()
+	defer p.Mutex.Unlock()
+
+	return p.Enabled
 }
 
 func (p *PodWatcher) setRunning(v bool) {

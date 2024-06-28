@@ -162,6 +162,7 @@ func TestPodWatcher_DeletePods(t *gtest.T) {
 	fakeWatch := watch.NewFake()
 
 	p.SetTimeout(100 * time.Millisecond)
+	p.SetEnabled(true)
 
 	podsAdded := make(chan interface{})
 	done := make(chan interface{})
@@ -226,5 +227,85 @@ func TestPodWatcher_DeletePods(t *gtest.T) {
 	// We can stop here
 	cancel()
 
+	<-done
+}
+
+func TestPodWatcher_NotEnabled(t *gtest.T) {
+	logrus.SetLevel(logrus.DebugLevel)
+	clientset := fake.NewSimpleClientset()
+	recorder := record.NewFakeRecorder(1024)
+	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
+	fakeWatch := watch.NewFake()
+
+	p.SetTimeout(100 * time.Millisecond)
+	p.SetEnabled(false)
+
+	podsAdded := make(chan interface{})
+	done := make(chan interface{})
+
+	// Create a cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
+
+	clientset.PrependWatchReactor("pods", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
+		go func() {
+			// Add a bunch of pods at regular intervals
+			for i := range [10]int{} {
+				fakeWatch.Add(createPod(fmt.Sprintf("test-%d", i+1)))
+				time.Sleep(50 * time.Millisecond)
+			}
+
+			// Signal that we have finished sending the Add events
+			podsAdded <- nil
+			close(podsAdded)
+		}()
+		return true, fakeWatch, nil
+	})
+
+	clientset.PrependReactor("delete", "pods", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
+		podName := action.(ktest.DeleteAction).GetName()
+		t.Logf("Asked to delete %s", podName)
+
+		go fakeWatch.Delete(createPod(podName))
+		return true, nil, nil
+	})
+
+	go func() {
+		if err := p.Start(ctx); err != nil {
+			t.Error(err)
+		}
+
+		// Signal that the test is over
+		done <- nil
+		close(done)
+	}()
+
+	// Wait for the events to be generated
+	<-podsAdded
+	time.Sleep(500 * time.Millisecond)
+
+	t.Log("First batch of assertions")
+	p.Mutex.Lock()
+	// We should still have 10 pods in the list
+	if cnt := len(p.PodList); cnt != 10 {
+		t.Errorf("Was expecting 10 pods in the list, got %d instead", cnt)
+	}
+	p.Mutex.Unlock()
+
+	p.SetEnabled(true)
+	t.Log("First batch of assertions over")
+
+	// Wait some more time for the pods to be deleted
+	time.Sleep(1 * time.Second)
+
+	t.Log("Second batch of assertions")
+	p.Mutex.Lock()
+	// We should now have 0 pods in the list
+	if cnt := len(p.PodList); cnt != 0 {
+		t.Errorf("Was expecting 0 pods in the list, got %d instead", cnt)
+	}
+	p.Mutex.Unlock()
+	t.Log("Second batch of assertions over")
+
+	cancel()
 	<-done
 }

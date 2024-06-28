@@ -36,9 +36,13 @@ var _ = (ConfigurableWatcher)((*PodWatcher)(nil))
 
 func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, namespace string, labelSelector ...string) ConfigurableWatcher {
 	logrus.Infof("Creating pod watcher in namespace %s for label selector %s", namespace, labelSelector)
+
 	if recorder == nil {
 		logrus.Debugf("No recorder provided, using default")
 		bc := record.NewBroadcaster()
+		bc.StartRecordingToSink(&corev1.EventSinkImpl{
+			Interface: clientset.CoreV1().Events(namespace),
+		})
 		recorder = bc.NewRecorder(scheme.Scheme, apicorev1.EventSource{Component: "chaos-monkey"})
 	}
 
@@ -103,6 +107,8 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 		return err
 	}
 
+	eventFormat := "Pod may be targeted by next Chaos Monkey in %s"
+
 	defer w.Stop()
 
 	p.setRunning(true)
@@ -111,7 +117,7 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 	for p.IsRunning() {
 		select {
 		case evt, ok := <-w.ResultChan():
-			logrus.Debugf("Pod Watcher received event: %+v", evt)
+			logrus.Debugf("Pod Watcher received event: %s", evt.Type)
 			pod := evt.Object.(*apicorev1.Pod)
 
 			if !ok {
@@ -126,6 +132,8 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 			case watch.Added:
 				logrus.Infof("Adding pod to list: %s", pod.Name)
 				p.addPodToList(pod)
+				p.Eventf(pod, apicorev1.EventTypeNormal, "ChaosMonkeyTarget", eventFormat, p.getTimeout())
+				logrus.Debug("Pod added, event sent!")
 			case watch.Deleted:
 				logrus.Infof("Removing pod from list: %s", pod.Name)
 				p.removePodFromList(pod)
@@ -148,13 +156,25 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 			} else {
 				logrus.Infof("Disrupting pod %s", randomPod.Name)
 				gracePeriod := int64(0)
-				err := p.Delete(ctx, randomPod.Name, metav1.DeleteOptions{
-					GracePeriodSeconds: &gracePeriod,
-				})
-				if err != nil {
+				if err := p.Delete(ctx, randomPod.Name, metav1.DeleteOptions{GracePeriodSeconds: &gracePeriod}); err != nil {
 					logrus.Errorf("Could not disrupt pod: %s", err)
+				} else {
+					p.Event(
+						randomPod,
+						apicorev1.EventTypeNormal,
+						"ChaosMonkeyTarget",
+						"Pod got killed by Chaos Monkey",
+					)
+					logrus.Debug("Pod disrupted, event sent!")
 				}
 			}
+
+			p.Mutex.Lock()
+			// Send an event to all the Pods, they could be the next target!
+			for _, pod := range p.PodList {
+				p.Eventf(pod, apicorev1.EventTypeNormal, "ChaosMonkeyTarget", eventFormat, p.Timeout)
+			}
+			p.Mutex.Unlock()
 		}
 
 		timer.Reset(p.getTimeout())

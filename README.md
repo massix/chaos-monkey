@@ -130,21 +130,24 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: chaosmonkey
 rules:
-  - apiGroups: ["*"]
+  - verbs: ["watch"]
     resources: ["namespaces"]
-    verbs: ["watch"]
-  - apiGroups: ["*"]
+    apiGroups: ["*"]
+  - verbs: ["patch", "get", "scale", "update"]
     resources: ["deployments"]
-    verbs: ["patch", "get", "scale", "update"]
-  - apiGroups: ["*"]
+    apiGroups: ["*"]
+  - verbs: ["list", "patch", "watch"]
     resources: ["chaosmonkeyconfigurations"]
-    verbs: ["list", "patch", "watch"]
-  - apiGroups: ["apps"]
+    apiGroups: ["*"]
+  - verbs: ["update"]
     resources: ["deployments/scale"]
-    verbs: ["update"]
-  - apiGroups: ["*"]
+    apiGroups: ["apps"]
+  - verbs: ["watch", "delete"]
+    resources: ["pods"]
+    apiGroups: ["*"]
+  - verbs: ["create", "patch"]
     resources: ["events"]
-    verbs: ["create", "patch"]
+    apiGroups: ["*"]
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1

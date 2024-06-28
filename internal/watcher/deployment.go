@@ -32,7 +32,7 @@ type DeploymentWatcher struct {
 	Enabled            bool
 }
 
-func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) DeploymentWatcherI {
+func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) ConfigurableWatcher {
 	// Build my own recorder here
 	if recorder == nil {
 		logrus.Debug("No recorder provided, using default")

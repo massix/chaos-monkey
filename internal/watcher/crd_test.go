@@ -12,7 +12,7 @@ import (
 	"github.com/massix/chaos-monkey/internal/watcher"
 	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	k "k8s.io/client-go/kubernetes"
@@ -29,6 +29,7 @@ type FakeDeploymentWatcher struct {
 	Timeout        time.Duration
 	Running        bool
 	Enabled        bool
+	IsPodMode      bool
 }
 
 // IsRunning implements watcher.DeploymentWatcherI.
@@ -89,7 +90,7 @@ func (f *FakeDeploymentWatcher) Stop() error {
 	return nil
 }
 
-var _ watcher.DeploymentWatcherI = &FakeDeploymentWatcher{}
+var _ watcher.ConfigurableWatcher = &FakeDeploymentWatcher{}
 
 func TestCRDWatcher_Create(t *testing.T) {
 	w := watcher.DefaultCrdFactory(kubernetes.NewSimpleClientset(), cmc.NewSimpleClientset(), record.NewFakeRecorder(1024), "chaos-monkey")
@@ -106,8 +107,13 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 	w.CleanupTimeout = 1 * time.Second
 
 	// Inject my Deployment Factory
-	watcher.DefaultDeploymentFactory = func(_ k.Interface, _ record.EventRecorderLogger, dep *appsv1.Deployment) watcher.DeploymentWatcherI {
-		return &FakeDeploymentWatcher{Mutex: &sync.Mutex{}, DeploymentName: dep.Name}
+	watcher.DefaultDeploymentFactory = func(_ k.Interface, _ record.EventRecorderLogger, dep *appsv1.Deployment) watcher.ConfigurableWatcher {
+		return &FakeDeploymentWatcher{Mutex: &sync.Mutex{}, DeploymentName: dep.Name, IsPodMode: false}
+	}
+
+	// Inject my Pod Factory
+	watcher.DefaultPodFactory = func(clientset k.Interface, recorder record.EventRecorderLogger, namespace string, labelSelector ...string) watcher.ConfigurableWatcher {
+		return &FakeDeploymentWatcher{Mutex: &sync.Mutex{}, DeploymentName: namespace, IsPodMode: true}
 	}
 
 	// Create the scenario
@@ -115,9 +121,9 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 		fakeWatch := watch.NewFake()
 
 		go func() {
-			createCMC := func(name string, enabled bool, minReplicas, maxReplicas int, deploymentName, timeout string) *v1alpha1.ChaosMonkeyConfiguration {
+			createCMC := func(name string, enabled, podMode bool, minReplicas, maxReplicas int, deploymentName, timeout string) *v1alpha1.ChaosMonkeyConfiguration {
 				return &v1alpha1.ChaosMonkeyConfiguration{
-					ObjectMeta: v1.ObjectMeta{
+					ObjectMeta: metav1.ObjectMeta{
 						Name: name,
 					},
 					Spec: v1alpha1.ChaosMonkeyConfigurationSpec{
@@ -126,15 +132,16 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 						MaxReplicas:    maxReplicas,
 						DeploymentName: deploymentName,
 						Timeout:        timeout,
+						PodMode:        podMode,
 					},
 				}
 			}
 
-			fakeWatch.Add(createCMC("test-1", true, 1, 1, "test-1", "1s"))
-			fakeWatch.Add(createCMC("test-2", false, 1, 1, "test-2", "10s"))
-			fakeWatch.Add(createCMC("test-3", true, 1, 1, "test-3", "invalidstring"))
-			fakeWatch.Modify(createCMC("test-1", true, 4, 8, "test-1", "1s"))
-			fakeWatch.Delete(createCMC("test-2", true, 4, 8, "test-2", "1s"))
+			fakeWatch.Add(createCMC("test-1", true, false, 1, 1, "test-1", "1s"))
+			fakeWatch.Add(createCMC("test-2", false, true, 1, 1, "test-2", "10s"))
+			fakeWatch.Add(createCMC("test-3", true, true, 1, 1, "test-3", "invalidstring"))
+			fakeWatch.Modify(createCMC("test-1", true, false, 4, 8, "test-1", "1s"))
+			fakeWatch.Delete(createCMC("test-2", true, false, 4, 8, "test-2", "1s"))
 		}()
 
 		return true, fakeWatch, nil
@@ -145,8 +152,14 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 		askedDeployment := action.(ktest.GetAction).GetName()
 		t.Logf("Asked deployment %s", askedDeployment)
 		dep := &appsv1.Deployment{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: askedDeployment,
+			},
+
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": askedDeployment},
+				},
 			},
 		}
 
@@ -235,7 +248,7 @@ func TestCRDWatcher_Error(t *testing.T) {
 		fakeWatch := watch.NewFake()
 		go func() {
 			fakeWatch.Error(&v1alpha1.ChaosMonkeyConfiguration{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "test",
 				},
 			})
@@ -273,7 +286,7 @@ func TestCRDWatcher_Cleanup(t *testing.T) {
 	w.CleanupTimeout = 1 * time.Second
 
 	// Inject some FakeDeploymentWatchers inside the watcher itself
-	w.DeploymentWatchers = map[string]watcher.DeploymentWatcherI{
+	w.DeploymentWatchers = map[string]watcher.ConfigurableWatcher{
 		"test-1": &FakeDeploymentWatcher{Running: true, Mutex: &sync.Mutex{}},
 		"test-2": &FakeDeploymentWatcher{Running: false, Mutex: &sync.Mutex{}},
 		"test-3": &FakeDeploymentWatcher{Running: false, Mutex: &sync.Mutex{}},

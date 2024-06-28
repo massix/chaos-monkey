@@ -44,6 +44,13 @@ spec:
                 deploymentName:
                   type: string
                   description: Deployment to which this CRD is associated to
+                podMode:
+                  type: boolean
+                  description: |
+                    Set this to true to kill random pods of the deployment instead of modifying
+                    the scale properties of the original deployment (this is a better solution if
+                    you have HPAs)
+                  default: true
                 timeout:
                   type: string
                   description: Timeout for the chaosmonkey
@@ -75,3 +82,6 @@ spec:
         - name: Max Replicas
           type: integer
           jsonPath: .spec.maxReplicas
+        - name: Disrupt Pods
+          type: boolean
+          jsonPath: .spec.podMode

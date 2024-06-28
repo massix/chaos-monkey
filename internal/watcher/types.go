@@ -16,7 +16,7 @@ type Watcher interface {
 	IsRunning() bool
 }
 
-type DeploymentWatcherI interface {
+type ConfigurableWatcher interface {
 	Watcher
 
 	SetMinReplicas(v int)
@@ -28,7 +28,8 @@ type DeploymentWatcherI interface {
 type (
 	NamespaceFactory  func(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, rootNamespace string) Watcher
 	CrdFactory        func(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, namespace string) Watcher
-	DeploymentFactory func(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) DeploymentWatcherI
+	DeploymentFactory func(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) ConfigurableWatcher
+	PodFactory        func(clientset kubernetes.Interface, recorder record.EventRecorderLogger, namespace string, labelSelector ...string) ConfigurableWatcher
 )
 
 // Default factories
@@ -36,4 +37,5 @@ var (
 	DefaultNamespaceFactory  NamespaceFactory  = NewNamespaceWatcher
 	DefaultCrdFactory        CrdFactory        = NewCrdWatcher
 	DefaultDeploymentFactory DeploymentFactory = NewDeploymentWatcher
+	DefaultPodFactory        PodFactory        = NewPodWatcher
 )

@@ -18,7 +18,7 @@ As you can imagine, we rely heavily on
 [Kubernetes' API](https://kubernetes.io/docs/reference/using-api/api-concepts/) to react
 based on what happens inside the cluster.
 
-Three main components are part of the current architecture.
+Four main components are part of the current architecture.
 
 <div align="center">
   <img src="./assets/cm-architecture.png" width="600px">
@@ -58,6 +58,7 @@ spec:
   maxReplicas: 9
   timeout: 10s
   deploymentName: nginx
+  podMode: true
 ```
 
 The CRD is **namespaced**, meaning that it **must** reside inside a Namespace and cannot be
@@ -67,6 +68,13 @@ The CRD Watcher, similarly to the [namespace one](#namespace-watcher), reacts to
 `ADDED` and `DELETED` events accordingly, creating and stopping goroutines, but it also
 reacts to the `MODIFIED` event, making it possible to modify a configuration while the
 Monkey is running.
+
+Depending on the value of the `podMode` flag, the CRD watcher will either create a
+[DeploymentWatcher](#deployment-watcher) or a [PodWatcher](#pod-watcher) The difference between
+the two is highlighted in the right paragraph, but in short: the DeploymentWatcher
+operates by modifying the `spec.replicas` field of the Deployment, using the
+`deployment/scale` APIs, while the PodWatcher simply deletes a random pod using the
+same `spec.selector` value of the targeted Deployment.
 
 ### Deployment Watcher
 This is where the fun begins, the Deployment Watcher is responsible of creating the
@@ -80,6 +88,15 @@ All the fields in the CRDs are mandatory and **must** be set. There are some sim
 validations done by Kubernetes itself, which are embedded in the
 [OpenAPI Schema](./crds/chaosmonkey-configuration.yaml) and some other validations
 are done in the code.
+
+### Pod Watcher
+This is another point where the fun begins. The Pod Watcher is responsible of
+creating the Chaos inside the cluster. The watcher is associated with a specific
+`spec.selector` field, and at regular intervals, specified by the `spec.timeout` field
+of the CRD, it will randomly kill a pod matching the field.
+
+The Pod Watcher **ignores** the `maxReplicas` and `minReplicas` fields of the CRD,
+thus generating real chaos inside the cluster.
 
 ## Deployment inside a Kubernetes Cluster
 In order to be able to deploy the ChaosMonkey inside a Kubernetes cluster you **must**

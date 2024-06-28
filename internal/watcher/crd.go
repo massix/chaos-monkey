@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,7 +30,7 @@ type CrdWatcher struct {
 
 	Client             kubernetes.Interface
 	Mutex              *sync.Mutex
-	DeploymentWatchers map[string]DeploymentWatcherI
+	DeploymentWatchers map[string]ConfigurableWatcher
 	Namespace          string
 	Running            bool
 	CleanupTimeout     time.Duration
@@ -54,7 +55,7 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 		Mutex:               &sync.Mutex{},
 		Namespace:           namespace,
 		Running:             false,
-		DeploymentWatchers:  map[string]DeploymentWatcherI{},
+		DeploymentWatchers:  map[string]ConfigurableWatcher{},
 		Client:              clientset,
 		CleanupTimeout:      1 * time.Minute,
 	}
@@ -201,8 +202,25 @@ func (c *CrdWatcher) addWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration, dep *api
 		parsedDuration = time.Duration(5 * time.Minute)
 	}
 
-	// Create the new watcher
-	newWatcher := DefaultDeploymentFactory(c.Client, nil, dep)
+	var newWatcher ConfigurableWatcher
+
+	if cmc.Spec.PodMode {
+		logrus.Debug("Creating new pod watcher")
+		if dep.Spec.Selector == nil || len(dep.Spec.Selector.MatchLabels) == 0 {
+			return fmt.Errorf("No selector labels found for deployment %s", dep.Name)
+		}
+
+		var combinedLabelSelector []string
+		for label, value := range dep.Spec.Selector.MatchLabels {
+			combinedLabelSelector = append(combinedLabelSelector, fmt.Sprintf("%s=%s", label, value))
+		}
+
+		logrus.Debugf("Configuring watcher with %+v", cmc.Spec)
+		newWatcher = DefaultPodFactory(c.Client, nil, dep.Namespace, strings.Join(combinedLabelSelector, ","))
+	} else {
+		logrus.Debug("Creating new deployment watcher")
+		newWatcher = DefaultDeploymentFactory(c.Client, nil, dep)
+	}
 
 	// Configure it
 	logrus.Debugf("Configuring watcher with %+v", cmc.Spec)

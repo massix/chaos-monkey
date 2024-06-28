@@ -7,25 +7,25 @@ import (
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type ChaosMonkeyConfiguration struct {
+	Status            ChaosMonkeyConfigurationStatus `json:"status"`
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata"`
-
-	Spec   ChaosMonkeyConfigurationSpec   `json:"spec"`
-	Status ChaosMonkeyConfigurationStatus `json:"status"`
+	Spec              ChaosMonkeyConfigurationSpec `json:"spec"`
 }
 
 type ChaosMonkeyConfigurationSpec struct {
-	Enabled        bool   `json:"enabled"`
-	MinReplicas    int    `json:"minReplicas"`
-	MaxReplicas    int    `json:"maxReplicas"`
 	DeploymentName string `json:"deploymentName"`
 	Timeout        string `json:"timeout,omitempty"`
+	MinReplicas    int    `json:"minReplicas"`
+	MaxReplicas    int    `json:"maxReplicas"`
+	Enabled        bool   `json:"enabled"`
+	PodMode        bool   `json:"podMode"`
 }
 
 type ChaosMonkeyConfigurationStatus struct {
-	Accepted          bool         `json:"accepted"`
 	LastExecution     *metav1.Time `json:"lastExecution"`
 	LastKnownReplicas *int         `json:"lastKnownReplicas"`
+	Accepted          bool         `json:"accepted"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

@@ -88,24 +88,46 @@ resource "kubernetes_namespace" "target-namespace" {
   }
 }
 
-resource "kubectl_manifest" "namespace-configuration" {
+resource "kubectl_manifest" "deployment-mode-crd" {
   yaml_body = <<YAML
     apiVersion: cm.massix.github.io/v1alpha1
     kind: ChaosMonkeyConfiguration
     metadata:
-      name: chaosmonkey-nginx
+      name: chaosmonkey-nginx-disrupt-scale
       namespace: ${kubernetes_namespace.target-namespace.id}
     spec:
       enabled: true
       minReplicas: 0
       maxReplicas: 9
       timeout: 10s
-      deploymentName: nginx
+      deploymentName: ${kubernetes_deployment.nginx-disrupt-scale.metadata.0.name}
+      podMode: false
   YAML
 
-  validate_schema = false
+  validate_schema = true
 
-  depends_on = [kubernetes_deployment.nginx-deployment]
+  depends_on = [kubernetes_deployment.nginx-disrupt-scale]
+}
+
+resource "kubectl_manifest" "pods-mode-crd" {
+  yaml_body = <<YAML
+    apiVersion: cm.massix.github.io/v1alpha1
+    kind: ChaosMonkeyConfiguration
+    metadata:
+      name: chaosmonkey-nginx-disrupt-pods
+      namespace: ${kubernetes_namespace.target-namespace.id}
+    spec:
+      enabled: true
+      minReplicas: 0
+      maxReplicas: 9
+      timeout: 10s
+      deploymentName: ${kubernetes_deployment.nginx-disrupt-pods.metadata.0.name}
+      podMode: true
+  YAML
+
+  validate_schema = true
+
+  depends_on = [kubernetes_deployment.nginx-disrupt-pods]
 }
 
 resource "kubectl_manifest" "crd" {
@@ -150,6 +172,12 @@ resource "kubernetes_cluster_role" "chaos-monkey-cr" {
     api_groups = ["apps"]
     resources  = ["deployments/scale"]
     verbs      = ["update"]
+  }
+
+  rule {
+    api_groups = ["*"]
+    resources  = ["pods"]
+    verbs      = ["watch", "delete"]
   }
 
   rule {
@@ -233,9 +261,10 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
   }
 }
 
-resource "kubernetes_deployment" "nginx-deployment" {
+// We are going to disrupt the SCALE of this deployment
+resource "kubernetes_deployment" "nginx-disrupt-scale" {
   metadata {
-    name      = "nginx"
+    name      = "nginx-disrupt-scale"
     namespace = kubernetes_namespace.target-namespace.id
   }
 
@@ -250,6 +279,44 @@ resource "kubernetes_deployment" "nginx-deployment" {
       metadata {
         labels = {
           "app" = "nginx"
+        }
+      }
+      spec {
+        container {
+          image = "nginx:alpine"
+          name  = "nginx"
+          port {
+            container_port = 80
+            name           = "http"
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_rollout = true
+}
+
+// We are going to disrupt the PODS of this deployment
+resource "kubernetes_deployment" "nginx-disrupt-pods" {
+  metadata {
+    name      = "nginx-disrupt-pods"
+    namespace = kubernetes_namespace.target-namespace.id
+  }
+
+  spec {
+    replicas = 3
+    selector {
+      match_labels = {
+        "app"        = "nginx-disrupt-pods"
+        "otherlabel" = "othervalue"
+      }
+    }
+    template {
+      metadata {
+        labels = {
+          "app"        = "nginx-disrupt-pods"
+          "otherlabel" = "othervalue"
         }
       }
       spec {

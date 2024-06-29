@@ -74,10 +74,16 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 
 	logrus.Infof("Starting namespace watcher for %s", n.RootNamespace)
 
-	w, err := n.Watch(ctx, v1.ListOptions{})
+	timeoutSeconds := int64((24 * time.Hour).Seconds())
+	w, err := n.Watch(ctx, v1.ListOptions{
+		Watch:          true,
+		TimeoutSeconds: &timeoutSeconds,
+	})
 	if err != nil {
 		return err
 	}
+
+	defer w.Stop()
 
 	n.setRunning(true)
 

@@ -3,7 +3,7 @@ TERRAFORM := $(shell which terraform)
 DOCKER := $(shell which docker)
 APPNAME ?= chaos-monkey
 IMAGE ?= chaos-monkey
-TAG ?= 2.0.1
+TAG ?= 2.0.3
 
 all: bin/$(APPNAME)
 .PHONY: clean generate bin/$(APPNAME) image-version cluster-test

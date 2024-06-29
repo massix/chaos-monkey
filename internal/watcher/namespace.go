@@ -78,18 +78,12 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer w.Stop()
 
 	n.setRunning(true)
 
 	for n.IsRunning() {
 		select {
 		case evt := <-w.ResultChan():
-			if evt.Object == nil {
-				logrus.Warnf("Received event with nil object: %+v", evt)
-				continue
-			}
-
 			ns := evt.Object.(*corev1.Namespace)
 
 			switch evt.Type {

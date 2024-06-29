@@ -81,18 +81,12 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer w.Stop()
 
 	c.setRunning(true)
 
 	for c.IsRunning() {
 		select {
 		case evt := <-w.ResultChan():
-			if evt.Object == nil {
-				logrus.Warnf("Received event with nil object: %+v", evt)
-				continue
-			}
-
 			cmc := evt.Object.(*v1alpha1.ChaosMonkeyConfiguration)
 
 			switch evt.Type {

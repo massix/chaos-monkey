@@ -99,9 +99,12 @@ func (p *PodWatcher) IsRunning() bool {
 func (p *PodWatcher) Start(ctx context.Context) error {
 	var err error
 	logrus.Infof("Starting pod watcher in namespace %s", p.Namespace)
+
+	watchTimeout := int64((24 * time.Hour).Seconds())
 	w, err := p.Watch(ctx, metav1.ListOptions{
-		Watch:         true,
-		LabelSelector: p.LabelSelector,
+		Watch:          true,
+		LabelSelector:  p.LabelSelector,
+		TimeoutSeconds: &watchTimeout,
 	})
 	if err != nil {
 		return err
@@ -116,19 +119,9 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 
 	for p.IsRunning() {
 		select {
-		case evt, ok := <-w.ResultChan():
+		case evt := <-w.ResultChan():
 			logrus.Debugf("Pod Watcher received event: %s", evt.Type)
-			if evt.Object == nil {
-				logrus.Warnf("Received evt with nil object: %+v", evt)
-				timer.Reset(p.getTimeout())
-				continue
-			}
-
 			pod := evt.Object.(*apicorev1.Pod)
-
-			if !ok {
-				return errors.New("Pod Watcher channel closed")
-			}
 
 			switch evt.Type {
 			case "", watch.Error:

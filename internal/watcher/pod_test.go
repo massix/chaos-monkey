@@ -154,37 +154,6 @@ func TestPodWatcher_BasicBehaviour(t *gtest.T) {
 	<-done
 }
 
-func TestPodWatcher_Error(t *gtest.T) {
-	logrus.SetLevel(logrus.DebugLevel)
-	clientset := fake.NewSimpleClientset()
-	recorder := record.NewFakeRecorder(1024)
-	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
-	p.Timeout = 1 * time.Second
-
-	done := make(chan interface{})
-	defer close(done)
-
-	clientset.PrependWatchReactor("pods", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
-		fakeWatch := watch.NewFake()
-		go func() {
-			fakeWatch.Error(createPod("test"))
-		}()
-
-		return true, fakeWatch, nil
-	})
-
-	// Start the watcher in background, it should fail
-	go func() {
-		if err := p.Start(context.Background()); err == nil {
-			t.Error("Was expecting an error")
-		}
-
-		done <- nil
-	}()
-
-	<-done
-}
-
 func TestPodWatcher_DeletePods(t *gtest.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := fake.NewSimpleClientset()
@@ -336,53 +305,6 @@ func TestPodWatcher_NotEnabled(t *gtest.T) {
 	}
 	p.Mutex.Unlock()
 	t.Log("Second batch of assertions over")
-
-	cancel()
-	<-done
-}
-
-func TestPodWatcher_NilObject(t *gtest.T) {
-	logrus.SetLevel(logrus.DebugLevel)
-	clientset := fake.NewSimpleClientset()
-	recorder := record.NewFakeRecorder(1024)
-	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
-	fakeWatch := watch.NewFake()
-
-	p.SetTimeout(100 * time.Millisecond)
-	p.SetEnabled(true)
-
-	done := make(chan interface{})
-
-	// Create a cancellable context
-	ctx, cancel := context.WithCancel(context.Background())
-
-	clientset.PrependWatchReactor("pods", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
-		go func() {
-			// Add a bunch of pods at regular intervals
-			for range [10]int{} {
-				fakeWatch.Add(nil)
-				time.Sleep(50 * time.Millisecond)
-			}
-		}()
-		return true, fakeWatch, nil
-	})
-
-	// Start watcher in background
-	go func() {
-		if err := p.Start(ctx); err != nil {
-			t.Error(err)
-		}
-
-		done <- nil
-	}()
-
-	// Wait for the events to be processed
-	time.Sleep(1 * time.Second)
-
-	// Despite the nil event, the watcher is still running
-	if !p.IsRunning() {
-		t.Error("Watcher stopped")
-	}
 
 	cancel()
 	<-done

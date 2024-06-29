@@ -75,12 +75,15 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 	var err error
 	var wg sync.WaitGroup
 
+	watchTimeout := int64((24 * time.Hour).Seconds())
 	w, err := c.ChaosMonkeyConfigurationInterface.Watch(ctx, metav1.ListOptions{
-		Watch: true,
+		Watch:          true,
+		TimeoutSeconds: &watchTimeout,
 	})
 	if err != nil {
 		return err
 	}
+
 	defer w.Stop()
 
 	c.setRunning(true)
@@ -88,11 +91,6 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 	for c.IsRunning() {
 		select {
 		case evt := <-w.ResultChan():
-			if evt.Object == nil {
-				logrus.Warnf("Received event with nil object: %+v", evt)
-				continue
-			}
-
 			cmc := evt.Object.(*v1alpha1.ChaosMonkeyConfiguration)
 
 			switch evt.Type {

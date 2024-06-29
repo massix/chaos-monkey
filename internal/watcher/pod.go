@@ -118,6 +118,12 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 		select {
 		case evt, ok := <-w.ResultChan():
 			logrus.Debugf("Pod Watcher received event: %s", evt.Type)
+			if evt.Object == nil {
+				logrus.Warnf("Received evt with nil object: %+v", evt)
+				timer.Reset(p.getTimeout())
+				continue
+			}
+
 			pod := evt.Object.(*apicorev1.Pod)
 
 			if !ok {

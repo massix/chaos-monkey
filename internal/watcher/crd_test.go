@@ -339,3 +339,42 @@ func TestCRDWatcher_Cleanup(t *testing.T) {
 		t.Error("Watcher should be stopped")
 	}
 }
+
+func TestCRDWatcher_NilObject(t *testing.T) {
+	clientSet := kubernetes.NewSimpleClientset()
+	cmClientset := cmc.NewSimpleClientset()
+	w := watcher.DefaultCrdFactory(clientSet, cmClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.CrdWatcher)
+	w.CleanupTimeout = 300 * time.Millisecond
+
+	// Setup the scenario for the CMCs
+	cmClientset.PrependWatchReactor("chaosmonkeyconfigurations", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
+		fakeWatch := watch.NewFake()
+		go func() {
+			fakeWatch.Add(nil)
+		}()
+		return true, fakeWatch, nil
+	})
+
+	// Now start the watcher
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		if err := w.Start(context.Background()); err != nil {
+			t.Error(err)
+		}
+
+		done <- struct{}{}
+	}()
+
+	time.Sleep(1 * time.Second)
+
+	// Despite the nil event the watcher is still running
+	if !w.IsRunning() {
+		t.Error("Watcher stopped")
+	}
+
+	_ = w.Stop()
+
+	<-done
+}

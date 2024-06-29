@@ -245,3 +245,42 @@ func TestNamespaceWatcher_Cleanup(t *testing.T) {
 		t.Errorf("Expected 0 watchers, got %d", len(w.CrdWatchers))
 	}
 }
+
+func TestNamespaceWatcher_NilObject(t *testing.T) {
+	logrus.SetLevel(logrus.DebugLevel)
+	clientset := kubernetes.NewSimpleClientset()
+	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey")
+	w.(*watcher.NamespaceWatcher).CleanupTimeout = 300 * time.Millisecond
+
+	clientset.PrependWatchReactor("namespaces", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
+		fakeWatch := watch.NewFake()
+
+		go func() {
+			fakeWatch.Add(nil)
+		}()
+		return true, fakeWatch, nil
+	})
+
+	// Now start the watcher
+	done := make(chan struct{}, 1)
+	defer close(done)
+
+	go func() {
+		if err := w.Start(context.Background()); err != nil {
+			t.Error(err)
+		}
+
+		done <- struct{}{}
+	}()
+
+	// Wait for all the events to be processed
+	time.Sleep(1 * time.Second)
+
+	// Despite the nil event, the watcher is still running
+	if !w.IsRunning() {
+		t.Error("Watcher stopped")
+	}
+
+	_ = w.Stop()
+	<-done
+}

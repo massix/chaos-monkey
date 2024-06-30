@@ -28,6 +28,8 @@ type PodWatcher struct {
 	LabelSelector string
 	PodList       []*apicorev1.Pod
 	Timeout       time.Duration
+	WatchTimeout  time.Duration
+	ForceStopChan chan interface{}
 	Enabled       bool
 	Running       bool
 }
@@ -55,6 +57,8 @@ func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorder
 		LabelSelector: strings.Join(labelSelector, ","),
 		PodList:       []*apicorev1.Pod{},
 		Timeout:       30 * time.Second,
+		WatchTimeout:  45 * time.Minute,
+		ForceStopChan: make(chan interface{}),
 		Enabled:       true,
 		Running:       false,
 	}
@@ -100,7 +104,7 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 	var err error
 	logrus.Infof("Starting pod watcher in namespace %s", p.Namespace)
 
-	watchTimeout := int64((24 * time.Hour).Seconds())
+	watchTimeout := int64(p.WatchTimeout.Seconds())
 	w, err := p.Watch(ctx, metav1.ListOptions{
 		Watch:          true,
 		LabelSelector:  p.LabelSelector,
@@ -119,15 +123,25 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 
 	for p.IsRunning() {
 		select {
-		case evt := <-w.ResultChan():
+		case evt, ok := <-w.ResultChan():
+			if !ok {
+				logrus.Warn("Watcher timeout")
+				if w, err = p.resetWatcher(ctx); err != nil {
+					logrus.Error(err)
+					p.setRunning(false)
+				}
+
+				break
+			}
+
 			logrus.Debugf("Pod Watcher received event: %s", evt.Type)
 			pod := evt.Object.(*apicorev1.Pod)
 
 			switch evt.Type {
-			case "", watch.Error:
+			case watch.Error:
 				logrus.Errorf("Received empty event or error from pod watcher: %+v", evt)
 				err = errors.New("Empty event or error from pod watcher")
-				_ = p.Stop()
+				p.setRunning(false)
 			case watch.Added:
 				logrus.Infof("Adding pod to list: %s", pod.Name)
 				p.addPodToList(pod)
@@ -141,7 +155,7 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 			}
 		case <-ctx.Done():
 			logrus.Info("Pod Watcher context done")
-			err = p.Stop()
+			p.setRunning(false)
 		case <-timer.C:
 			if !p.isEnabled() {
 				logrus.Debug("CRD not enabled, refusing to disrupt pods")
@@ -174,6 +188,8 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 				p.Eventf(pod, apicorev1.EventTypeNormal, "ChaosMonkeyTarget", eventFormat, p.Timeout)
 			}
 			p.Mutex.Unlock()
+		case <-p.ForceStopChan:
+			logrus.Info("Force stopped watcher")
 		}
 
 		timer.Reset(p.getTimeout())
@@ -191,6 +207,13 @@ func (p *PodWatcher) Stop() error {
 	logrus.Infof("Stopping pod watcher in namespace %s", p.Namespace)
 
 	p.Running = false
+
+	select {
+	case p.ForceStopChan <- nil:
+	default:
+		logrus.Warn("Could not write in channel")
+	}
+
 	return nil
 }
 
@@ -244,4 +267,22 @@ func (p *PodWatcher) getRandomPod() (*apicorev1.Pod, error) {
 	}
 
 	return p.PodList[rand.Intn(len(p.PodList))], nil
+}
+
+func (p *PodWatcher) resetWatcher(ctx context.Context) (watch.Interface, error) {
+	p.Mutex.Lock()
+	defer p.Mutex.Unlock()
+
+	logrus.Infof("Resetting pod watcher for %s", p.LabelSelector)
+
+	// Remove all the recorded pods
+	p.PodList = []*apicorev1.Pod{}
+	logrus.Debugf("Cleaned pod list for %s", p.LabelSelector)
+
+	timeoutSeconds := int64(p.WatchTimeout.Seconds())
+	return p.Watch(ctx, metav1.ListOptions{
+		Watch:          true,
+		LabelSelector:  p.LabelSelector,
+		TimeoutSeconds: &timeoutSeconds,
+	})
 }

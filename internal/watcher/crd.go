@@ -31,9 +31,11 @@ type CrdWatcher struct {
 	Client             kubernetes.Interface
 	Mutex              *sync.Mutex
 	DeploymentWatchers map[string]ConfigurableWatcher
+	ForceStopChan      chan interface{}
 	Namespace          string
-	Running            bool
 	CleanupTimeout     time.Duration
+	WatcherTimeout     time.Duration
+	Running            bool
 }
 
 var _ = (Watcher)((*CrdWatcher)(nil))
@@ -49,15 +51,17 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 
 	return &CrdWatcher{
 		ChaosMonkeyConfigurationInterface: cmcClientset.ChaosMonkeyConfigurationV1alpha1().ChaosMonkeyConfigurations(namespace),
+		DeploymentInterface:               clientset.AppsV1().Deployments(namespace),
+		EventRecorderLogger:               recorder,
 
-		DeploymentInterface: clientset.AppsV1().Deployments(namespace),
-		EventRecorderLogger: recorder,
-		Mutex:               &sync.Mutex{},
-		Namespace:           namespace,
-		Running:             false,
-		DeploymentWatchers:  map[string]ConfigurableWatcher{},
-		Client:              clientset,
-		CleanupTimeout:      1 * time.Minute,
+		Client:             clientset,
+		Mutex:              &sync.Mutex{},
+		DeploymentWatchers: map[string]ConfigurableWatcher{},
+		ForceStopChan:      make(chan interface{}),
+		Namespace:          namespace,
+		CleanupTimeout:     15 * time.Minute,
+		WatcherTimeout:     24 * time.Hour,
+		Running:            false,
 	}
 }
 
@@ -75,7 +79,7 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 	var err error
 	var wg sync.WaitGroup
 
-	watchTimeout := int64((24 * time.Hour).Seconds())
+	watchTimeout := int64(c.WatcherTimeout.Seconds())
 	w, err := c.ChaosMonkeyConfigurationInterface.Watch(ctx, metav1.ListOptions{
 		Watch:          true,
 		TimeoutSeconds: &watchTimeout,
@@ -90,13 +94,24 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 
 	for c.IsRunning() {
 		select {
-		case evt := <-w.ResultChan():
+		case evt, ok := <-w.ResultChan():
+			if !ok {
+				logrus.Warnf("Watch for %s timed out", c.Namespace)
+				w, err = c.restartWatchers(ctx, &wg)
+				if err != nil {
+					logrus.Errorf("Error while restarting watchers: %s", err)
+					c.setRunning(false)
+				}
+
+				break
+			}
+
 			cmc := evt.Object.(*v1alpha1.ChaosMonkeyConfiguration)
 
 			switch evt.Type {
 			case "", watch.Error:
 				logrus.Errorf("Received empty error or event from CRD watcher: %+v", evt)
-				_ = c.Stop()
+				c.setRunning(false)
 				err = errors.New("Empty event or error from CRD watcher")
 
 			case watch.Added:
@@ -145,13 +160,19 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 				logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Deleted", "Watcher deleted for deployment %s", cmc.Spec.DeploymentName)
 			}
+
 		case <-ctx.Done():
 			logrus.Infof("Watcher context done")
-			_ = c.Stop()
+			c.setRunning(false)
 
 		case <-time.After(c.CleanupTimeout):
 			logrus.Debug("Garbage collecting Chaos Monkeys")
 			c.cleanUp()
+
+		case <-c.ForceStopChan:
+			// This is here just to wake up early from the loop
+			logrus.Info("Force stopping CRD Watcher")
+			c.setRunning(false)
 		}
 	}
 
@@ -180,6 +201,15 @@ func (c *CrdWatcher) Stop() error {
 	c.Running = false
 
 	logrus.Debugf("Stopping CRD watcher for %s", c.Namespace)
+	logrus.Debug("Force stopping")
+
+	select {
+	case c.ForceStopChan <- nil:
+	default:
+		logrus.Warn("Could not write to ForceStopChannel")
+	}
+
+	close(c.ForceStopChan)
 	return nil
 }
 
@@ -312,4 +342,30 @@ func (c *CrdWatcher) cleanUp() {
 			delete(c.DeploymentWatchers, name)
 		}
 	}
+}
+
+func (c *CrdWatcher) restartWatchers(ctx context.Context, wg *sync.WaitGroup) (watch.Interface, error) {
+	c.Mutex.Lock()
+	defer c.Mutex.Unlock()
+
+	logrus.Infof("Restarting CRD Watcher for %s", c.Namespace)
+
+	logrus.Debug("Cleaning existing watchers")
+	for key, w := range c.DeploymentWatchers {
+		logrus.Debugf("Stopping watcher for %s", key)
+		if err := w.Stop(); err != nil {
+			logrus.Warnf("Error while stopping watcher for %s: %s", key, err)
+		}
+
+		delete(c.DeploymentWatchers, key)
+	}
+
+	logrus.Info("Waiting for monkeys to get back home")
+	wg.Wait()
+
+	timeoutSeconds := int64(c.WatcherTimeout.Seconds())
+	return c.ChaosMonkeyConfigurationInterface.Watch(ctx, metav1.ListOptions{
+		Watch:          true,
+		TimeoutSeconds: &timeoutSeconds,
+	})
 }

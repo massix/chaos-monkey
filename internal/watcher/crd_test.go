@@ -2,8 +2,10 @@ package watcher_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -337,5 +339,81 @@ func TestCRDWatcher_Cleanup(t *testing.T) {
 
 	if w.IsRunning() {
 		t.Error("Watcher should be stopped")
+	}
+}
+
+func TestCRDWatcher_Restart(t *testing.T) {
+	clientSet := kubernetes.NewSimpleClientset()
+	cmClientset := cmc.NewSimpleClientset()
+	w := watcher.DefaultCrdFactory(clientSet, cmClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.CrdWatcher)
+	w.CleanupTimeout = 1 * time.Second
+	timesRestarted := &atomic.Int32{}
+	timesRestarted.Store(0)
+
+	watcher.DefaultDeploymentFactory = func(clientset k.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) watcher.ConfigurableWatcher {
+		return &FakeDeploymentWatcher{Mutex: &sync.Mutex{}}
+	}
+
+	// Setup the scenario for the CMCs
+	cmClientset.PrependWatchReactor("chaosmonkeyconfigurations", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
+		fakeWatch := watch.NewFake()
+		timesRestarted.Add(1)
+
+		go func() {
+			for i := range [10]int{} {
+				depName := fmt.Sprintf("test-%d", i)
+				fakeWatch.Add(&v1alpha1.ChaosMonkeyConfiguration{
+					ObjectMeta: metav1.ObjectMeta{Name: depName},
+					Spec: v1alpha1.ChaosMonkeyConfigurationSpec{
+						PodMode:        false,
+						Timeout:        "10s",
+						MinReplicas:    0,
+						MaxReplicas:    10,
+						Enabled:        false,
+						DeploymentName: depName,
+					},
+				})
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			fakeWatch.Stop()
+		}()
+		return true, fakeWatch, nil
+	})
+
+	clientSet.PrependReactor("get", "deployments", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
+		requestedName := action.(ktest.GetAction).GetName()
+		return true, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: requestedName}}, nil
+	})
+
+	// Start the watcher in background
+	done := make(chan interface{})
+	defer close(done)
+
+	go func() {
+		if err := w.Start(context.Background()); err != nil {
+			t.Error(err)
+		}
+
+		done <- nil
+	}()
+
+	time.Sleep(4300 * time.Millisecond)
+
+	// It should still be running
+	w.Mutex.Lock()
+	if !w.Running {
+		t.Error("Watcher should be running")
+	}
+	w.Mutex.Unlock()
+
+	// Now stop it and verify that the watcher restarted 5 times
+	if err := w.Stop(); err != nil {
+		t.Error(err)
+	}
+	<-done
+
+	if timesRestarted.Load() != 5 {
+		t.Errorf("Expected 5 restarts, got %d", timesRestarted.Load())
 	}
 }

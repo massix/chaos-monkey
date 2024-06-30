@@ -179,7 +179,7 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 		timer.Reset(p.getTimeout())
 	}
 
-	logrus.Infof("Stopping pod watcher in namespace %s", p.Namespace)
+	logrus.Infof("Pod watcher in namespace %s finished", p.Namespace)
 	return err
 }
 

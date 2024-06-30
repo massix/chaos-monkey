@@ -2,8 +2,10 @@ package watcher_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ import (
 )
 
 type FakeCrdWatcher struct {
-	Mutex        *sync.Mutex
+	*sync.Mutex
 	StartedTimes int
 	StoppedTimes int
 	Running      bool
@@ -29,16 +31,17 @@ type FakeCrdWatcher struct {
 
 // IsRunning implements watcher.Watcher.
 func (f *FakeCrdWatcher) IsRunning() bool {
-	f.Mutex.Lock()
-	defer f.Mutex.Unlock()
+	f.Lock()
+	defer f.Unlock()
 
 	return f.Running
 }
 
 // Start implements watcher.Watcher.
 func (f *FakeCrdWatcher) Start(ctx context.Context) error {
-	f.Mutex.Lock()
-	defer f.Mutex.Unlock()
+	f.Lock()
+	defer f.Unlock()
+
 	f.Running = true
 	f.StartedTimes++
 	return nil
@@ -46,8 +49,9 @@ func (f *FakeCrdWatcher) Start(ctx context.Context) error {
 
 // Stop implements watcher.Watcher.
 func (f *FakeCrdWatcher) Stop() error {
-	f.Mutex.Lock()
-	defer f.Mutex.Unlock()
+	f.Lock()
+	defer f.Unlock()
+
 	f.Running = false
 	f.StoppedTimes++
 	return nil
@@ -244,4 +248,54 @@ func TestNamespaceWatcher_Cleanup(t *testing.T) {
 	if len(w.CrdWatchers) != 0 {
 		t.Errorf("Expected 0 watchers, got %d", len(w.CrdWatchers))
 	}
+}
+
+func TestNamespaceWatcher_RestartWatcher(t *testing.T) {
+	clientset := kubernetes.NewSimpleClientset()
+	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey")
+	w.(*watcher.NamespaceWatcher).CleanupTimeout = 1 * time.Second
+	timeAsked := &atomic.Int32{}
+	timeAsked.Store(0)
+
+	watcher.DefaultCrdFactory = func(clientset k.Interface, cmcClientset typedcmc.Interface, recorder record.EventRecorderLogger, namespace string) watcher.Watcher {
+		return &FakeCrdWatcher{Mutex: &sync.Mutex{}}
+	}
+
+	clientset.PrependWatchReactor("namespaces", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
+		fakeWatch := watch.NewFake()
+		timeAsked.Add(1)
+
+		go func() {
+			for i := range [10]int{} {
+				fakeWatch.Add(&corev1.Namespace{ObjectMeta: v1.ObjectMeta{Name: fmt.Sprintf("test-%d", i)}})
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			fakeWatch.Stop()
+		}()
+		return true, fakeWatch, nil
+	})
+
+	// Now start the watcher
+	done := make(chan interface{})
+	defer close(done)
+
+	go func() {
+		if err := w.Start(context.Background()); err != nil {
+			t.Error(err)
+		}
+
+		done <- nil
+	}()
+
+	// Now wait, if the namespace watcher doesn't terminate with an error, all is good!
+	time.Sleep(5 * time.Second)
+	_ = w.Stop()
+
+	// We should have 5 restarts (5 calls to the Watch method)
+	if timeAsked.Load() != 5 {
+		t.Errorf("Expected 5 restarts, got %d", timeAsked)
+	}
+
+	<-done
 }

@@ -23,6 +23,7 @@ type DeploymentWatcher struct {
 	typedappsv1.DeploymentInterface
 	record.EventRecorderLogger
 
+	Logrus             logrus.FieldLogger
 	OriginalDeployment *appsv1.Deployment
 	Mutex              *sync.Mutex
 	MinReplicas        int
@@ -34,6 +35,8 @@ type DeploymentWatcher struct {
 }
 
 func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) ConfigurableWatcher {
+	logrus.Infof("Creating new Deployment watcher for %s/%s", deployment.Namespace, deployment.Name)
+
 	// Build my own recorder here
 	if recorder == nil {
 		logrus.Debug("No recorder provided, using default")
@@ -47,6 +50,7 @@ func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventR
 		OriginalDeployment:  deployment,
 		EventRecorderLogger: recorder,
 
+		Logrus:        logrus.WithFields(logrus.Fields{"component": "DeploymentWatcher", "namespace": deployment.Namespace, "deploymentName": deployment.Name}),
 		Mutex:         &sync.Mutex{},
 		MinReplicas:   0,
 		MaxReplicas:   0,
@@ -99,7 +103,7 @@ func (d *DeploymentWatcher) SetTimeout(v time.Duration) {
 
 // Start implements DeploymentWatcherI.
 func (d *DeploymentWatcher) Start(ctx context.Context) error {
-	logrus.Infof("Starting Chaos Monkey for deployment %s", d.getOriginalDeployment().Name)
+	d.Logrus.Infof("Starting Chaos Monkey")
 	timer := time.NewTimer(d.getTimeout())
 
 	d.setRunning(true)
@@ -112,33 +116,33 @@ func (d *DeploymentWatcher) Start(ctx context.Context) error {
 		select {
 		case <-timer.C:
 			if !d.isEnabled() {
-				logrus.Debug("Skipping scaling")
+				d.Logrus.Debug("Skipping scaling")
 			} else {
-				logrus.Debugf("Scaling deployment %s", d.OriginalDeployment.Name)
+				d.Logrus.Debug("Scaling deployment")
 				newReplicas := max(rng.Intn(d.getMaxReplicas()+1), d.getMinReplicas())
 				if err := d.scaleDeployment(newReplicas); err != nil {
-					logrus.Errorf("Error while scaling deployment: %s", err)
+					d.Logrus.Errorf("Error while scaling deployment: %s", err)
 					consecutiveErrors++
-					logrus.Debugf("Consecutive errors: %d", consecutiveErrors)
+					d.Logrus.Debugf("Consecutive errors: %d", consecutiveErrors)
 				} else {
-					logrus.Debug("Resetting consecutive errors")
+					d.Logrus.Debug("Resetting consecutive errors")
 					consecutiveErrors = 0
 				}
 			}
 		case <-ctx.Done():
-			logrus.Infof("Stopping deployment %s", d.OriginalDeployment.Name)
+			d.Logrus.Info("Stopping Chaos Monkey")
 			d.setRunning(false)
 		case <-d.ForceStopChan:
-			logrus.Infof("Force stopping deployment %s", d.getOriginalDeployment().GetName())
+			d.Logrus.Info("Force stopping Chaos Monkey")
 		}
 
 		if consecutiveErrors >= 5 {
-			logrus.Error("Too many consecutive errors, stopping deployment watcher")
+			d.Logrus.Error("Too many consecutive errors, stopping deployment watcher")
 			err1 := d.Stop()
 			return errors.Join(err1, errors.New("too many consecutive errors"))
 		}
 
-		logrus.Debugf("Resetting timer to %s", d.getTimeout())
+		d.Logrus.Debugf("Resetting timer to %s", d.getTimeout())
 		timer.Reset(d.getTimeout())
 	}
 
@@ -146,7 +150,7 @@ func (d *DeploymentWatcher) Start(ctx context.Context) error {
 }
 
 func (d *DeploymentWatcher) scaleDeployment(newReplicas int) error {
-	logrus.Infof("Scaling deployment %s to %d replicas", d.getOriginalDeployment().Name, newReplicas)
+	d.Logrus.Infof("Scaling deployment to %d replicas", newReplicas)
 
 	res, err := d.UpdateScale(context.Background(), d.getOriginalDeployment().Name, &scalev1.Scale{
 		ObjectMeta: metav1.ObjectMeta{
@@ -159,7 +163,7 @@ func (d *DeploymentWatcher) scaleDeployment(newReplicas int) error {
 	}, metav1.UpdateOptions{})
 
 	if err == nil {
-		logrus.Debugf("Successfully scaled %s to %d replicas, publishing event", res.Name, res.Spec.Replicas)
+		d.Logrus.Debugf("Successfully scaled to %d replicas, publishing event", res.Spec.Replicas)
 		d.Eventf(d.getOriginalDeployment(), corev1.EventTypeNormal, "ChaosMonkey", "Converted to %d replicas", res.Spec.Replicas)
 	}
 
@@ -213,12 +217,12 @@ func (d *DeploymentWatcher) Stop() error {
 	d.Mutex.Lock()
 	defer d.Mutex.Unlock()
 
-	logrus.Debugf("Stopping deployment watcher for %s", d.OriginalDeployment.Name)
+	d.Logrus.Debug("Stopping Chaos Monkey")
 
 	select {
 	case d.ForceStopChan <- nil:
 	default:
-		logrus.Warnf("Could not write to ForceStopChan")
+		d.Logrus.Warn("Could not write to ForceStopChan")
 	}
 
 	d.Running = false

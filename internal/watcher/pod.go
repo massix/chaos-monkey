@@ -57,7 +57,7 @@ func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorder
 		LabelSelector: strings.Join(labelSelector, ","),
 		PodList:       []*apicorev1.Pod{},
 		Timeout:       30 * time.Second,
-		WatchTimeout:  45 * time.Minute,
+		WatchTimeout:  15 * time.Minute,
 		ForceStopChan: make(chan interface{}),
 		Enabled:       true,
 		Running:       false,

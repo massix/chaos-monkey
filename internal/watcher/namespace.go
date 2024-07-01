@@ -57,7 +57,7 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		Running:             false,
 		Client:              clientset,
 		CmcClient:           cmcClientset,
-		WatcherTimeout:      30 * time.Minute,
+		WatcherTimeout:      48 * time.Hour,
 	}
 }
 

@@ -97,7 +97,7 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 		case evt, ok := <-w.ResultChan():
 			if !ok {
 				logrus.Warnf("Watch for %s timed out", c.Namespace)
-				w, err = c.restartWatchers(ctx, &wg)
+				w, err = c.restartWatch(ctx, &wg)
 				if err != nil {
 					logrus.Errorf("Error while restarting watchers: %s", err)
 					c.setRunning(false)
@@ -344,7 +344,7 @@ func (c *CrdWatcher) cleanUp() {
 	}
 }
 
-func (c *CrdWatcher) restartWatchers(ctx context.Context, wg *sync.WaitGroup) (watch.Interface, error) {
+func (c *CrdWatcher) restartWatch(ctx context.Context, wg *sync.WaitGroup) (watch.Interface, error) {
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
 

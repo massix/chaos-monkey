@@ -126,7 +126,7 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 		case evt, ok := <-w.ResultChan():
 			if !ok {
 				logrus.Warn("Watcher timeout")
-				if w, err = p.resetWatcher(ctx); err != nil {
+				if w, err = p.restartWatch(ctx); err != nil {
 					logrus.Error(err)
 					p.setRunning(false)
 				}
@@ -269,7 +269,7 @@ func (p *PodWatcher) getRandomPod() (*apicorev1.Pod, error) {
 	return p.PodList[rand.Intn(len(p.PodList))], nil
 }
 
-func (p *PodWatcher) resetWatcher(ctx context.Context) (watch.Interface, error) {
+func (p *PodWatcher) restartWatch(ctx context.Context) (watch.Interface, error) {
 	p.Mutex.Lock()
 	defer p.Mutex.Unlock()
 

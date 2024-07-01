@@ -21,6 +21,8 @@ import (
 type NamespaceWatcher struct {
 	typedcorev1.NamespaceInterface
 	record.EventRecorderLogger
+
+	Logrus         logrus.FieldLogger
 	Client         kubernetes.Interface
 	CmcClient      mc.Interface
 	CrdWatchers    map[string]Watcher
@@ -50,14 +52,16 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 	return &NamespaceWatcher{
 		NamespaceInterface:  clientset.CoreV1().Namespaces(),
 		EventRecorderLogger: recorder,
-		CrdWatchers:         map[string]Watcher{},
-		Mutex:               &sync.Mutex{},
-		CleanupTimeout:      1 * time.Minute,
-		RootNamespace:       rootNamespace,
-		Running:             false,
-		Client:              clientset,
-		CmcClient:           cmcClientset,
-		WatcherTimeout:      48 * time.Hour,
+
+		Logrus:         logrus.WithFields(logrus.Fields{"component": "NamespaceWatcher", "rootNamespace": rootNamespace}),
+		CrdWatchers:    map[string]Watcher{},
+		Mutex:          &sync.Mutex{},
+		CleanupTimeout: 1 * time.Minute,
+		RootNamespace:  rootNamespace,
+		Running:        false,
+		Client:         clientset,
+		CmcClient:      cmcClientset,
+		WatcherTimeout: 48 * time.Hour,
 	}
 }
 
@@ -74,7 +78,7 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 	var err error
 	var wg sync.WaitGroup
 
-	logrus.Infof("Starting namespace watcher for %s, timeout: %s", n.RootNamespace, n.WatcherTimeout)
+	n.Logrus.Infof("Starting watcher, timeout: %s", n.WatcherTimeout)
 
 	timeoutSeconds := int64(n.WatcherTimeout.Seconds())
 	w, err := n.Watch(ctx, v1.ListOptions{
@@ -93,10 +97,10 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 		select {
 		case evt, ok := <-w.ResultChan():
 			if !ok {
-				logrus.Warn("Watcher chan closed, resetting everything")
+				n.Logrus.Warn("Watcher chan closed, resetting everything")
 				w, err = n.restartWatch(ctx, &wg)
 				if err != nil {
-					logrus.Errorf("Error while restarting watcher: %s", err)
+					n.Logrus.Errorf("Error while restarting watcher: %s", err)
 					_ = n.Stop()
 				}
 
@@ -108,48 +112,48 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 			switch evt.Type {
 
 			case "", watch.Error:
-				logrus.Errorf("Received empty event or error from watcher: %+v", evt)
+				n.Logrus.Errorf("Received empty event or error from watcher: %+v", evt)
 				err = errors.New("Empty event or error from namespace watcher")
 				_ = n.Stop()
 
 			case watch.Added:
-				logrus.Infof("Adding watcher for namespace %s", ns.Name)
+				n.Logrus.Infof("Adding watcher for namespace %s", ns.Name)
 				if err := n.addWatcher(ns.Name); err != nil {
 					logrus.Errorf("Error while trying to add CRD watcher: %s", err)
 					continue
 				}
 
-				logrus.Debug("All is good! Sending event.")
+				n.Logrus.Debug("All is good! Sending event.")
 				n.startCrdWatcher(ctx, ns.Name, &wg)
 				n.Eventf(ns, "Normal", "Added", "CRD Watcher added for %s", ns.Name)
 
 			case watch.Deleted:
-				logrus.Infof("Deleting watcher for namespace %s", ns.Name)
+				n.Logrus.Infof("Deleting watcher for namespace %s", ns.Name)
 				if err := n.removeWatcher(ns.Name); err != nil {
-					logrus.Warnf("Error while trying to remove CRD watcher: %s", err)
+					n.Logrus.Warnf("Error while trying to remove CRD watcher: %s", err)
 				}
 
-				logrus.Debug("All is good! Sending event.")
+				n.Logrus.Debug("All is good! Sending event.")
 				n.Eventf(ns, "Normal", "Deleted", "CRD Watcher deleted for %s", ns.Name)
 			}
 
 		case <-ctx.Done():
-			logrus.Infof("Context cancelled")
+			n.Logrus.Info("Context cancelled")
 			_ = n.Stop()
 
 		case <-time.After(n.CleanupTimeout):
-			logrus.Debug("Cleaning up...")
+			n.Logrus.Debug("Cleaning up...")
 			n.cleanUp()
 		}
 	}
 
-	logrus.Info("Namespace watcher stopped, cleaning up...")
+	n.Logrus.Info("Namespace watcher stopped, cleaning up...")
 	n.Mutex.Lock()
 
 	for ns, crd := range n.CrdWatchers {
-		logrus.Infof("Stopping watcher for namespace %s", ns)
+		n.Logrus.Infof("Stopping watcher for namespace %s", ns)
 		if err := crd.Stop(); err != nil {
-			logrus.Warnf("Error while trying to stop CRD watcher: %s", err)
+			n.Logrus.Warnf("Error while trying to stop CRD watcher: %s", err)
 		}
 
 		delete(n.CrdWatchers, ns)
@@ -157,7 +161,7 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 
 	n.Mutex.Unlock()
 
-	logrus.Info("Waiting for all CRD Watchers to finish")
+	n.Logrus.Info("Waiting for all CRD Watchers to finish")
 	wg.Wait()
 	return err
 }
@@ -167,7 +171,7 @@ func (n *NamespaceWatcher) Stop() error {
 	n.Mutex.Lock()
 	defer n.Mutex.Unlock()
 
-	logrus.Debugf("Stopping namespace watcher for %s", n.RootNamespace)
+	n.Logrus.Debugf("Stopping namespace watcher for %s", n.RootNamespace)
 
 	n.Running = false
 	return nil
@@ -209,9 +213,9 @@ func (n *NamespaceWatcher) cleanUp() {
 
 	for ns, w := range n.CrdWatchers {
 		if !w.IsRunning() {
-			logrus.Infof("Cleaning up watcher for namespace %s", ns)
+			n.Logrus.Infof("Cleaning up watcher for namespace %s", ns)
 			if err := w.Stop(); err != nil {
-				logrus.Warnf("Error while trying to remove CRD watcher: %s", err)
+				n.Logrus.Warnf("Error while trying to remove CRD watcher: %s", err)
 			}
 
 			delete(n.CrdWatchers, ns)
@@ -236,15 +240,15 @@ func (n *NamespaceWatcher) startCrdWatcher(ctx context.Context, namespace string
 	go func() {
 		defer wg.Done()
 
-		logrus.Debugf("Starting CRD Watcher for namespace %s", namespace)
+		n.Logrus.Debugf("Starting CRD Watcher for namespace %s", namespace)
 
 		if watcher == nil {
-			logrus.Warnf("No watcher found for namespace %s", namespace)
+			n.Logrus.Warnf("No watcher found for namespace %s", namespace)
 			return
 		}
 
 		if err := watcher.Start(ctx); err != nil {
-			logrus.Errorf("Error while starting CRD Watcher for namespace %s", namespace)
+			n.Logrus.Errorf("Error while starting CRD Watcher for namespace %s", namespace)
 		}
 	}()
 }
@@ -253,11 +257,11 @@ func (n *NamespaceWatcher) restartWatch(ctx context.Context, wg *sync.WaitGroup)
 	n.Mutex.Lock()
 	defer n.Mutex.Unlock()
 
-	logrus.Info("Preparing for restart: cleaning all the CRD Watchers")
+	n.Logrus.Info("Preparing for restart: cleaning all the CRD Watchers")
 
 	// Stop all the running watches
 	for k, w := range n.CrdWatchers {
-		logrus.Debugf("Cleaning %s", k)
+		n.Logrus.Debugf("Cleaning %s", k)
 		if err := w.Stop(); err != nil {
 			logrus.Warnf("Error while stopping CRD Watcher for %s: %s", k, err)
 		}
@@ -266,10 +270,10 @@ func (n *NamespaceWatcher) restartWatch(ctx context.Context, wg *sync.WaitGroup)
 	}
 
 	// Wait for all the CRD Watchers to be stopped
-	logrus.Info("Waiting for all CRD Watchers to finish...")
+	n.Logrus.Info("Waiting for all CRD Watchers to finish...")
 	wg.Wait()
 
-	logrus.Infof("Restarting watcher with timeout: %s", n.WatcherTimeout)
+	n.Logrus.Infof("Restarting watcher with timeout: %s", n.WatcherTimeout)
 
 	// Now recreate a new watch interface
 	timeoutSeconds := int64(n.WatcherTimeout.Seconds())

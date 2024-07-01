@@ -272,13 +272,13 @@ resource "kubernetes_deployment" "nginx-disrupt-scale" {
     replicas = 1
     selector {
       match_labels = {
-        "app" = "nginx"
+        "app" = "nginx-disrupt-scale"
       }
     }
     template {
       metadata {
         labels = {
-          "app" = "nginx"
+          "app" = "nginx-disrupt-scale"
         }
       }
       spec {

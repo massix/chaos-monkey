@@ -29,12 +29,11 @@ jobs:
         with:
           skipClusterCreation: true
       - run: terraform init
-      - run: make cluster-test
-      - run: sleep 30
-      - run: kubectl get ns | grep target
-      - run: kubectl get ns | grep chaosmonkey
-      - run: kubectl -n chaosmonkey get pods | grep chaos-monkey
-      - run: kubectl -n target get deployments | grep nginx
-      - run: kubectl -n target get cmc | grep chaosmonkey-nginx
-      - run: kubectl -n target get events | grep ChaosMonkey
+        name: Initialize Terraform
+      - run: |
+          make cluster-test
+          sleep 10
+          ./tests/kubetest.sh
+        name: End to end tests
       - run: make clean
+        name: Cleanup

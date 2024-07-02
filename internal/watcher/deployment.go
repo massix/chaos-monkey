@@ -28,6 +28,7 @@ type DeploymentWatcher struct {
 	MinReplicas        int
 	MaxReplicas        int
 	Timeout            time.Duration
+	ForceStopChan      chan interface{}
 	Running            bool
 	Enabled            bool
 }
@@ -46,12 +47,13 @@ func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventR
 		OriginalDeployment:  deployment,
 		EventRecorderLogger: recorder,
 
-		Mutex:       &sync.Mutex{},
-		MinReplicas: 0,
-		MaxReplicas: 0,
-		Timeout:     0,
-		Running:     false,
-		Enabled:     false,
+		Mutex:         &sync.Mutex{},
+		MinReplicas:   0,
+		MaxReplicas:   0,
+		Timeout:       0,
+		ForceStopChan: make(chan interface{}),
+		Running:       false,
+		Enabled:       false,
 	}
 }
 
@@ -126,6 +128,8 @@ func (d *DeploymentWatcher) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			logrus.Infof("Stopping deployment %s", d.OriginalDeployment.Name)
 			d.setRunning(false)
+		case <-d.ForceStopChan:
+			logrus.Infof("Force stopping deployment %s", d.getOriginalDeployment().GetName())
 		}
 
 		if consecutiveErrors >= 5 {
@@ -210,6 +214,12 @@ func (d *DeploymentWatcher) Stop() error {
 	defer d.Mutex.Unlock()
 
 	logrus.Debugf("Stopping deployment watcher for %s", d.OriginalDeployment.Name)
+
+	select {
+	case d.ForceStopChan <- nil:
+	default:
+		logrus.Warnf("Could not write to ForceStopChan")
+	}
 
 	d.Running = false
 	return nil

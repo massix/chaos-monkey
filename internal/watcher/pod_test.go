@@ -3,6 +3,7 @@ package watcher_test
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	gtest "testing"
 	"time"
 
@@ -307,5 +308,63 @@ func TestPodWatcher_NotEnabled(t *gtest.T) {
 	t.Log("Second batch of assertions over")
 
 	cancel()
+	<-done
+}
+
+func TestPodWatcher_Restart(t *gtest.T) {
+	logrus.SetLevel(logrus.DebugLevel)
+	clientset := fake.NewSimpleClientset()
+	recorder := record.NewFakeRecorder(1024)
+	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
+
+	p.SetTimeout(5 * time.Hour)
+	p.SetEnabled(true)
+
+	done := make(chan interface{})
+
+	timesCalled := &atomic.Int32{}
+	timesCalled.Store(0)
+
+	clientset.PrependWatchReactor("pods", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
+		timesCalled.Add(1)
+		fakeWatch := watch.NewFake()
+		go func() {
+			// Add a bunch of pods at regular intervals
+			for i := range [10]int{} {
+				fakeWatch.Add(createPod(fmt.Sprintf("test-%d", i+1)))
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			fakeWatch.Stop()
+		}()
+		return true, fakeWatch, nil
+	})
+
+	go func() {
+		if err := p.Start(context.Background()); err != nil {
+			t.Error(err)
+		}
+
+		done <- nil
+	}()
+
+	// Wait for the events to be processed
+	time.Sleep(3000 * time.Millisecond)
+
+	// At this point, the watcher should have 10 pods in the list
+	p.Mutex.Lock()
+	if cnt := len(p.PodList); cnt != 10 {
+		t.Errorf("Was expecting 10 pods in the list, got %d instead", cnt)
+	}
+	p.Mutex.Unlock()
+
+	// And the watch should have been called 3 times
+	if cnt := timesCalled.Load(); cnt != 3 {
+		t.Errorf("Was expecting 4 watch calls, got %d instead", cnt)
+	}
+
+	// We can now stop the watch
+	_ = p.Stop()
+
 	<-done
 }

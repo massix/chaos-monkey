@@ -3,6 +3,7 @@ package watcher_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,11 +50,12 @@ func TestDeploymentWatcher_BasicBehaviour(t *testing.T) {
 	w.SetMaxReplicas(4)
 	w.SetTimeout(100 * time.Millisecond)
 
-	numberOfRequests := 0
+	numberOfRequests := &atomic.Int32{}
+	numberOfRequests.Store(0)
 
 	// Create the scenario
 	clientset.PrependReactor("update", "deployments", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
-		numberOfRequests++
+		numberOfRequests.Add(1)
 		scaleRequest := action.(ktest.UpdateAction).GetObject().(*scalev1.Scale)
 
 		if scaleRequest.Spec.Replicas < 2 || scaleRequest.Spec.Replicas > 4 {
@@ -74,7 +76,7 @@ func TestDeploymentWatcher_BasicBehaviour(t *testing.T) {
 	}()
 
 	// Wait for some events to be produced
-	time.Sleep(1 * time.Second)
+	time.Sleep(1060 * time.Millisecond)
 
 	// Stop the watcher
 	if err := w.Stop(); err != nil {
@@ -86,7 +88,7 @@ func TestDeploymentWatcher_BasicBehaviour(t *testing.T) {
 	t.Logf("Number of requests: %d", numberOfRequests)
 
 	// We should have received 10 requests
-	if numberOfRequests != 10 {
+	if numberOfRequests.Load() != 10 {
 		t.Errorf("Wrong number of requests: %d", numberOfRequests)
 	}
 }

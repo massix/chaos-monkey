@@ -146,6 +146,7 @@ func (d *DeploymentWatcher) Start(ctx context.Context) error {
 		timer.Reset(d.getTimeout())
 	}
 
+	d.Logrus.Info("Chaos Monkey stopped")
 	return nil
 }
 
@@ -218,6 +219,7 @@ func (d *DeploymentWatcher) Stop() error {
 	defer d.Mutex.Unlock()
 
 	d.Logrus.Debug("Stopping Chaos Monkey")
+	d.Running = false
 
 	select {
 	case d.ForceStopChan <- nil:
@@ -225,6 +227,5 @@ func (d *DeploymentWatcher) Stop() error {
 		d.Logrus.Warn("Could not write to ForceStopChan")
 	}
 
-	d.Running = false
 	return nil
 }

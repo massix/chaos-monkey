@@ -192,9 +192,22 @@ pull request. If you want to develop and test locally, you need to install:
 - [Kind](https://github.com/kubernetes-sigs/kind) at least version 0.5.0
 - [Kubectl](https://kubernetes.io/docs/tasks/tools/) at least version 1.30.1
 
-The reason why you need so many tools, is because there is an embedded
-[terraform file](./main.tf) which spawns a Kubernetes cluster in your local machine
-using Kind, injects the CRD, builds the image and gives you a working environment
-to test your development. There are some unit tests included, but since all the
-interactions with Kubernetes are mocked, we cannot be sure that everything will
-work once deployed.
+### Unit Tests
+The project includes a wide variety of unit tests, which are using the `fake` client
+of kubernetes included in the `client-go` library. The problem is that when testing
+with mocks, most of the times you end up testing the mocks and not the code. That's
+the reason why there are also some [integration tests](#integration-tests) included.
+
+### Integration Tests
+These tests should cover the basic functionalities of the Chaos Monkey in a local
+Kubernetes cluster. The script file is [here](./tests/kubetest.sh) and before launching
+it you should create the Kubernetes cluster locally, using the included [Terraform](./main.tf) configuration.
+
+It should be as easy as launching:
+
+    $ make cluster-test
+    $ ./tests/kubetest.sh
+
+You can also activate a more verbose logging for the tests with
+
+    TEST_DEBUG=true ./tests/kubetest.sh

@@ -101,6 +101,22 @@ func TestCRDWatcher_Create(t *testing.T) {
 	}
 }
 
+func createCMC(name string, enabled, podMode bool, minReplicas, maxReplicas int, deploymentName, timeout string) *v1alpha1.ChaosMonkeyConfiguration {
+	return &v1alpha1.ChaosMonkeyConfiguration{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: v1alpha1.ChaosMonkeyConfigurationSpec{
+			Enabled:        enabled,
+			MinReplicas:    minReplicas,
+			MaxReplicas:    maxReplicas,
+			DeploymentName: deploymentName,
+			Timeout:        timeout,
+			PodMode:        podMode,
+		},
+	}
+}
+
 func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientSet := kubernetes.NewSimpleClientset()
@@ -123,22 +139,6 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 		fakeWatch := watch.NewFake()
 
 		go func() {
-			createCMC := func(name string, enabled, podMode bool, minReplicas, maxReplicas int, deploymentName, timeout string) *v1alpha1.ChaosMonkeyConfiguration {
-				return &v1alpha1.ChaosMonkeyConfiguration{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: name,
-					},
-					Spec: v1alpha1.ChaosMonkeyConfigurationSpec{
-						Enabled:        enabled,
-						MinReplicas:    minReplicas,
-						MaxReplicas:    maxReplicas,
-						DeploymentName: deploymentName,
-						Timeout:        timeout,
-						PodMode:        podMode,
-					},
-				}
-			}
-
 			fakeWatch.Add(createCMC("test-1", true, false, 1, 1, "test-1", "1s"))
 			fakeWatch.Add(createCMC("test-2", false, true, 1, 1, "test-2", "10s"))
 			fakeWatch.Add(createCMC("test-3", true, true, 1, 1, "test-3", "invalidstring"))
@@ -195,7 +195,7 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 		for key, crd := range w.DeploymentWatchers {
 			if key == depName {
 				found = true
-				check(crd.(*FakeDeploymentWatcher))
+				check(crd.Watcher.(*FakeDeploymentWatcher))
 			}
 		}
 
@@ -288,10 +288,10 @@ func TestCRDWatcher_Cleanup(t *testing.T) {
 	w.CleanupTimeout = 1 * time.Second
 
 	// Inject some FakeDeploymentWatchers inside the watcher itself
-	w.DeploymentWatchers = map[string]watcher.ConfigurableWatcher{
-		"test-1": &FakeDeploymentWatcher{Running: true, Mutex: &sync.Mutex{}},
-		"test-2": &FakeDeploymentWatcher{Running: false, Mutex: &sync.Mutex{}},
-		"test-3": &FakeDeploymentWatcher{Running: false, Mutex: &sync.Mutex{}},
+	w.DeploymentWatchers = map[string]*watcher.WatcherConfiguration{
+		"test-1": {Configuration: nil, Watcher: &FakeDeploymentWatcher{Running: true, Mutex: &sync.Mutex{}}},
+		"test-2": {Configuration: nil, Watcher: &FakeDeploymentWatcher{Running: false, Mutex: &sync.Mutex{}}},
+		"test-3": {Configuration: nil, Watcher: &FakeDeploymentWatcher{Running: false, Mutex: &sync.Mutex{}}},
 	}
 
 	// Setup the scenario for the CMCs
@@ -362,17 +362,7 @@ func TestCRDWatcher_Restart(t *testing.T) {
 		go func() {
 			for i := range [10]int{} {
 				depName := fmt.Sprintf("test-%d", i)
-				fakeWatch.Add(&v1alpha1.ChaosMonkeyConfiguration{
-					ObjectMeta: metav1.ObjectMeta{Name: depName},
-					Spec: v1alpha1.ChaosMonkeyConfigurationSpec{
-						PodMode:        false,
-						Timeout:        "10s",
-						MinReplicas:    0,
-						MaxReplicas:    10,
-						Enabled:        false,
-						DeploymentName: depName,
-					},
-				})
+				fakeWatch.Add(createCMC(depName, false, false, 0, 10, depName, "10s"))
 				time.Sleep(100 * time.Millisecond)
 			}
 
@@ -416,4 +406,120 @@ func TestCRDWatcher_Restart(t *testing.T) {
 	if timesRestarted.Load() != 5 {
 		t.Errorf("Expected 5 restarts, got %d", timesRestarted.Load())
 	}
+}
+
+func TestCRDWatcher_ModifyWatcherType(t *testing.T) {
+	clientSet := kubernetes.NewSimpleClientset()
+	cmClientset := cmc.NewSimpleClientset()
+	w := watcher.DefaultCrdFactory(clientSet, cmClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.CrdWatcher)
+	w.CleanupTimeout = 1 * time.Second
+
+	// Number of times each watcher has been created
+	podWatchers := &atomic.Int32{}
+	deployWatchers := &atomic.Int32{}
+	podWatchers.Store(0)
+	deployWatchers.Store(0)
+
+	fakeWatch := watch.NewFake()
+
+	watcher.DefaultDeploymentFactory = func(clientset k.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) watcher.ConfigurableWatcher {
+		deployWatchers.Add(1)
+		return &FakeDeploymentWatcher{Mutex: &sync.Mutex{}}
+	}
+
+	watcher.DefaultPodFactory = func(clientset k.Interface, recorder record.EventRecorderLogger, namespace string, labelSelector ...string) watcher.ConfigurableWatcher {
+		podWatchers.Add(1)
+		return &FakeDeploymentWatcher{Mutex: &sync.Mutex{}}
+	}
+
+	clientSet.PrependReactor("get", "deployments", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
+		requestedName := action.(ktest.GetAction).GetName()
+		return true, &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: requestedName},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": requestedName}},
+			},
+		}, nil
+	})
+
+	cmClientset.PrependWatchReactor("chaosmonkeyconfigurations", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
+		go func() {
+			fakeWatch.Add(createCMC("test-deploy", false, false, 0, 10, "test-deploy", "10s"))
+			fakeWatch.Add(createCMC("test-pod", false, true, 0, 10, "test-pod", "10s"))
+		}()
+
+		return true, fakeWatch, nil
+	})
+
+	done := make(chan interface{})
+	defer close(done)
+
+	go func() {
+		if err := w.Start(context.Background()); err != nil {
+			t.Error(err)
+		}
+
+		done <- nil
+	}()
+
+	// Wait for the events to be processed
+	time.Sleep(500 * time.Millisecond)
+
+	// We should have 2 watchers
+	w.Mutex.Lock()
+	if cnt := len(w.DeploymentWatchers); cnt != 2 {
+		t.Errorf("Expected 2 watchers, got %d", cnt)
+	}
+	if podWatchers.Load() != 1 {
+		t.Errorf("Expected 1 pod watcher, got %d", podWatchers.Load())
+	}
+	if deployWatchers.Load() != 1 {
+		t.Errorf("Expected 1 deployment watcher, got %d", deployWatchers.Load())
+	}
+
+	w.Mutex.Unlock()
+
+	// Now send a Modify event
+	fakeWatch.Modify(createCMC("test-deploy", false, true, 0, 10, "test-deploy", "10s"))
+	time.Sleep(100 * time.Millisecond)
+
+	// We should still have 2 watchers
+	w.Mutex.Lock()
+	if cnt := len(w.DeploymentWatchers); cnt != 2 {
+		t.Errorf("Expected 2 watchers, got %d", cnt)
+	}
+
+	// This time we should have 2 podwatchers created
+	if podWatchers.Load() != 2 {
+		t.Errorf("Expected 2 pod watchers, got %d", podWatchers.Load())
+	}
+
+	// But still only 1 deploywatchers
+	if deployWatchers.Load() != 1 {
+		t.Errorf("Expected 1 deployment watcher, got %d", deployWatchers.Load())
+	}
+	w.Mutex.Unlock()
+
+	// Now send another Modify event
+	fakeWatch.Modify(createCMC("test-pod", false, false, 0, 10, "test-pod", "10s"))
+	time.Sleep(100 * time.Millisecond)
+
+	// Still 2 watchers
+	w.Mutex.Lock()
+	if cnt := len(w.DeploymentWatchers); cnt != 2 {
+		t.Errorf("Expected 2 watchers, got %d", cnt)
+	}
+
+	// Now both should have 2 calls
+	if podWatchers.Load() != 2 {
+		t.Errorf("Expected 2 pod watchers, got %d", podWatchers.Load())
+	}
+
+	if deployWatchers.Load() != 2 {
+		t.Errorf("Expected 2 deployment watchers, got %d", deployWatchers.Load())
+	}
+	w.Mutex.Unlock()
+
+	_ = w.Stop()
+	<-done
 }

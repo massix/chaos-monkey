@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "type": "shell",
+  "tasks": [
+    {
+      "label": "Create docker image",
+      "command": "make docker",
+      "group": "build",
+      "options": {
+        "env": {
+          "IMAGE": "massix86/chaos-monkey",
+          "TAG": "dev"
+        }
+      }
+    },
+    {
+      "label": "Push docker image",
+      "command": "docker push $IMAGE:$TAG",
+      "group": "build",
+      "options": {
+        "env": {
+          "IMAGE": "massix86/chaos-monkey",
+          "TAG": "dev"
+        }
+      }
+    },
+    {
+      "label": "Clean docker system",
+      "command": "docker system prune --all --force",
+      "group": "build"
+    },
+    {
+      "label": "Create cluster",
+      "command": "make cluster-test",
+      "group": "build"
+    },
+    {
+      "label": "E2E Tests",
+      "command": "${workspaceFolder}/tests/kubetest.sh",
+      "group": "test",
+      "dependsOn": [
+        "Create cluster"
+      ]
+    }
+  ]
+}

@@ -18,26 +18,28 @@ import (
 var Version string
 
 func main() {
+	log := logrus.WithFields(logrus.Fields{"component": "main"})
+
 	// Get the LogLevel from the environment variable
 	ll, err := configuration.FromEnvironment()
 	if err != nil {
-		logrus.Warnf("No loglevel provided, using default: %s", logrus.GetLevel())
+		log.Warnf("No loglevel provided, using default: %s", logrus.GetLevel())
 	} else {
 		logrus.SetLevel(ll.LogrusLevel())
 	}
 
-	logrus.Infof("Starting Chaos-Monkey version: %s", Version)
+	log.Infof("Starting Chaos-Monkey version: %s", Version)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
-	logrus.Info("Getting information from Kubernetes")
+	log.Info("Getting information from Kubernetes")
 	bytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 	if err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 
 	namespace := string(bytes)
-	logrus.Info("Using namespace: " + namespace)
+	log.Info("Using namespace: " + namespace)
 
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -57,18 +59,18 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := nsWatcher.Start(ctx); err != nil {
-			logrus.Errorf("Error from namespace watcher: %s", err)
+			log.Errorf("Error from namespace watcher: %s", err)
 		}
 	}()
 
 	// Wait for a signal to arrive
 	<-s
 
-	logrus.Info("Shutting down...")
+	log.Info("Shutting down...")
 	cancel()
 
-	logrus.Info("Wait for namespace watcher to finish...")
+	log.Info("Wait for namespace watcher to finish...")
 	wg.Wait()
 
-	logrus.Info("Bye!")
+	log.Info("Bye!")
 }

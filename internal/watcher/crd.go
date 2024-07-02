@@ -28,6 +28,7 @@ type CrdWatcher struct {
 	appsv1.DeploymentInterface
 	record.EventRecorderLogger
 
+	Logrus             logrus.FieldLogger
 	Client             kubernetes.Interface
 	Mutex              *sync.Mutex
 	DeploymentWatchers map[string]ConfigurableWatcher
@@ -54,6 +55,7 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 		DeploymentInterface:               clientset.AppsV1().Deployments(namespace),
 		EventRecorderLogger:               recorder,
 
+		Logrus:             logrus.WithFields(logrus.Fields{"component": "CRDWatcher", "namespace": namespace}),
 		Client:             clientset,
 		Mutex:              &sync.Mutex{},
 		DeploymentWatchers: map[string]ConfigurableWatcher{},
@@ -75,7 +77,7 @@ func (c *CrdWatcher) IsRunning() bool {
 
 // Start implements Watcher.
 func (c *CrdWatcher) Start(ctx context.Context) error {
-	logrus.Infof("Starting CRD watcher in namespace %s", c.Namespace)
+	c.Logrus.Info("Starting CRD watcher")
 	var err error
 	var wg sync.WaitGroup
 
@@ -96,10 +98,10 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 		select {
 		case evt, ok := <-w.ResultChan():
 			if !ok {
-				logrus.Warnf("Watch for %s timed out", c.Namespace)
+				c.Logrus.Warn("Watch timed out")
 				w, err = c.restartWatch(ctx, &wg)
 				if err != nil {
-					logrus.Errorf("Error while restarting watchers: %s", err)
+					c.Logrus.Errorf("Error while restarting watchers: %s", err)
 					c.setRunning(false)
 				}
 
@@ -110,80 +112,80 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 
 			switch evt.Type {
 			case "", watch.Error:
-				logrus.Errorf("Received empty error or event from CRD watcher: %+v", evt)
+				c.Logrus.Errorf("Received empty error or event from CRD watcher: %+v", evt)
 				c.setRunning(false)
 				err = errors.New("Empty event or error from CRD watcher")
 
 			case watch.Added:
-				logrus.Infof("Received ADDED event for %s, for deployment %s", cmc.Name, cmc.Spec.DeploymentName)
+				c.Logrus.Infof("Received ADDED event for %s, for deployment %s", cmc.Name, cmc.Spec.DeploymentName)
 
 				// Check if the target deployment exists
 				dep, err := c.DeploymentInterface.Get(ctx, cmc.Spec.DeploymentName, metav1.GetOptions{})
 				if err != nil {
-					logrus.Errorf("Error while trying to get deployment: %s", err)
+					c.Logrus.Errorf("Error while trying to get deployment: %s", err)
 					continue
 				}
 
-				logrus.Infof("Adding watcher for deployment %s", dep.Name)
+				c.Logrus.Infof("Adding watcher for deployment %s", dep.Name)
 
 				// Add a new watcher
 				if err = c.addWatcher(cmc, dep); err != nil {
-					logrus.Errorf("Error while trying to add watcher: %s", err)
+					c.Logrus.Errorf("Error while trying to add watcher: %s", err)
 					continue
 				}
 
 				// Start it
 				if err := c.startWatcher(ctx, dep.Name, &wg); err != nil {
-					logrus.Errorf("Error while trying to start watcher: %s", err)
+					c.Logrus.Errorf("Error while trying to start watcher: %s", err)
 				}
 
-				logrus.Debug("All is good! Publishing event.")
+				c.Logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Started", "Watcher started for deployment %s", dep.Name)
 
 			case watch.Modified:
-				logrus.Infof("Received MODIFIED event for %s, for deployment %s", cmc.Name, cmc.Spec.DeploymentName)
+				c.Logrus.Infof("Received MODIFIED event for %s, for deployment %s", cmc.Name, cmc.Spec.DeploymentName)
 
 				if err := c.modifyWatcher(cmc); err != nil {
-					logrus.Errorf("Error while trying to modify watcher: %s", err)
+					c.Logrus.Errorf("Error while trying to modify watcher: %s", err)
 				}
 
-				logrus.Debug("All is good! Publishing event.")
+				c.Logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Modified", "Watcher modified for deployment %s", cmc.Spec.DeploymentName)
 
 			case watch.Deleted:
-				logrus.Infof("Received DELETED event for %s, for deployment %s", cmc.Name, cmc.Spec.DeploymentName)
+				c.Logrus.Infof("Received DELETED event for %s, for deployment %s", cmc.Name, cmc.Spec.DeploymentName)
 
 				if err := c.deleteWatcher(cmc); err != nil {
-					logrus.Errorf("Error while trying to delete watcher: %s", err)
+					c.Logrus.Errorf("Error while trying to delete watcher: %s", err)
 				}
 
-				logrus.Debug("All is good! Publishing event.")
+				c.Logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Deleted", "Watcher deleted for deployment %s", cmc.Spec.DeploymentName)
 			}
 
 		case <-ctx.Done():
-			logrus.Infof("Watcher context done")
+			c.Logrus.Info("Watcher context done")
 			c.setRunning(false)
 
 		case <-time.After(c.CleanupTimeout):
-			logrus.Debug("Garbage collecting Chaos Monkeys")
+			c.Logrus.Debug("Garbage collecting Chaos Monkeys")
 			c.cleanUp()
 
 		case <-c.ForceStopChan:
 			// This is here just to wake up early from the loop
-			logrus.Info("Force stopping CRD Watcher")
+			c.Logrus.Info("Force stopping CRD Watcher")
 			c.setRunning(false)
 		}
 	}
 
-	logrus.Infof("Watcher stopped, waiting for monkeys to get back home")
+	c.Logrus.Info("Watcher stopped, waiting for monkeys to get back home")
 
 	// Stop all the remaining watchers
 	c.Mutex.Lock()
 	for dep, watcher := range c.DeploymentWatchers {
-		logrus.Infof("Stopping watcher for deployment %s", dep)
+		c.Logrus.Infof("Stopping watcher for deployment %s", dep)
 		if err := watcher.Stop(); err != nil {
-			logrus.Warnf("Error while stopping watcher: %s", err)
+			c.Logrus.Warnf("Error while stopping watcher: %s", err)
 		}
 		delete(c.DeploymentWatchers, dep)
 	}
@@ -200,13 +202,13 @@ func (c *CrdWatcher) Stop() error {
 
 	c.Running = false
 
-	logrus.Debugf("Stopping CRD watcher for %s", c.Namespace)
-	logrus.Debug("Force stopping")
+	c.Logrus.Debug("Stopping CRD watcher")
+	c.Logrus.Debug("Force stopping")
 
 	select {
 	case c.ForceStopChan <- nil:
 	default:
-		logrus.Warn("Could not write to ForceStopChannel")
+		c.Logrus.Warn("Could not write to ForceStopChannel")
 	}
 
 	close(c.ForceStopChan)
@@ -232,14 +234,14 @@ func (c *CrdWatcher) addWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration, dep *api
 
 	parsedDuration, err := time.ParseDuration(cmc.Spec.Timeout)
 	if err != nil {
-		logrus.Warnf("Error while parsing timeout: %s, defaulting to 5 minutes", err)
+		c.Logrus.Warnf("Error while parsing timeout: %s, defaulting to 5 minutes", err)
 		parsedDuration = time.Duration(5 * time.Minute)
 	}
 
 	var newWatcher ConfigurableWatcher
 
 	if cmc.Spec.PodMode {
-		logrus.Debug("Creating new pod watcher")
+		c.Logrus.Debug("Creating new pod watcher")
 		if dep.Spec.Selector == nil || len(dep.Spec.Selector.MatchLabels) == 0 {
 			return fmt.Errorf("No selector labels found for deployment %s", dep.Name)
 		}
@@ -249,21 +251,21 @@ func (c *CrdWatcher) addWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration, dep *api
 			combinedLabelSelector = append(combinedLabelSelector, fmt.Sprintf("%s=%s", label, value))
 		}
 
-		logrus.Debugf("Configuring watcher with %+v", cmc.Spec)
+		c.Logrus.Debugf("Configuring watcher with %+v", cmc.Spec)
 		newWatcher = DefaultPodFactory(c.Client, nil, dep.Namespace, strings.Join(combinedLabelSelector, ","))
 	} else {
-		logrus.Debug("Creating new deployment watcher")
+		c.Logrus.Debug("Creating new deployment watcher")
 		newWatcher = DefaultDeploymentFactory(c.Client, nil, dep)
 	}
 
 	// Configure it
-	logrus.Debugf("Configuring watcher with %+v", cmc.Spec)
+	c.Logrus.Debugf("Configuring watcher with %+v", cmc.Spec)
 	newWatcher.SetEnabled(cmc.Spec.Enabled)
 	newWatcher.SetMinReplicas(cmc.Spec.MinReplicas)
 	newWatcher.SetMaxReplicas(cmc.Spec.MaxReplicas)
 	newWatcher.SetTimeout(parsedDuration)
 
-	logrus.Debug("Adding watcher to map")
+	c.Logrus.Debug("Adding watcher to map")
 	c.DeploymentWatchers[dep.Name] = newWatcher
 
 	return nil
@@ -281,9 +283,9 @@ func (c *CrdWatcher) startWatcher(ctx context.Context, forDeployment string, wg 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logrus.Debugf("Starting watcher for %s", forDeployment)
+		c.Logrus.Debugf("Starting watcher for %s", forDeployment)
 		if err := watcher.Start(ctx); err != nil {
-			logrus.Errorf("Error while starting watcher: %s", err)
+			c.Logrus.Errorf("Error while starting watcher: %s", err)
 		}
 	}()
 
@@ -299,14 +301,14 @@ func (c *CrdWatcher) modifyWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration) error
 		return fmt.Errorf("Watcher for deployment %s does not exist", cmc.Spec.DeploymentName)
 	}
 
-	logrus.Debugf("Reconfiguring watcher with %+v", cmc.Spec)
+	c.Logrus.Debugf("Reconfiguring watcher with %+v", cmc.Spec)
 	watcher.SetEnabled(cmc.Spec.Enabled)
 	watcher.SetMinReplicas(cmc.Spec.MinReplicas)
 	watcher.SetMaxReplicas(cmc.Spec.MaxReplicas)
 
 	parsedDuration, err := time.ParseDuration(cmc.Spec.Timeout)
 	if err != nil {
-		logrus.Warnf("Error while parsing timeout: %s, not modifying it", err)
+		c.Logrus.Warnf("Error while parsing timeout: %s, not modifying it", err)
 	} else {
 		watcher.SetTimeout(parsedDuration)
 	}
@@ -318,11 +320,11 @@ func (c *CrdWatcher) deleteWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration) error
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
 
-	logrus.Infof("Deleting watcher for %s", cmc.Spec.DeploymentName)
+	c.Logrus.Infof("Deleting watcher for %s", cmc.Spec.DeploymentName)
 
 	if watcher, ok := c.DeploymentWatchers[cmc.Spec.DeploymentName]; ok {
 		if err := watcher.Stop(); err != nil {
-			logrus.Warnf("Error while stopping watcher: %s", err)
+			c.Logrus.Warnf("Error while stopping watcher: %s", err)
 		}
 		delete(c.DeploymentWatchers, cmc.Spec.DeploymentName)
 	} else {
@@ -338,7 +340,7 @@ func (c *CrdWatcher) cleanUp() {
 
 	for name, watcher := range c.DeploymentWatchers {
 		if !watcher.IsRunning() {
-			logrus.Infof("Removing watcher for %s", name)
+			c.Logrus.Infof("Removing watcher for %s", name)
 			delete(c.DeploymentWatchers, name)
 		}
 	}
@@ -348,19 +350,19 @@ func (c *CrdWatcher) restartWatch(ctx context.Context, wg *sync.WaitGroup) (watc
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
 
-	logrus.Infof("Restarting CRD Watcher for %s", c.Namespace)
+	c.Logrus.Info("Restarting CRD Watcher")
 
-	logrus.Debug("Cleaning existing watchers")
+	c.Logrus.Debug("Cleaning existing watchers")
 	for key, w := range c.DeploymentWatchers {
-		logrus.Debugf("Stopping watcher for %s", key)
+		c.Logrus.Debugf("Stopping watcher for %s", key)
 		if err := w.Stop(); err != nil {
-			logrus.Warnf("Error while stopping watcher for %s: %s", key, err)
+			c.Logrus.Warnf("Error while stopping watcher for %s: %s", key, err)
 		}
 
 		delete(c.DeploymentWatchers, key)
 	}
 
-	logrus.Info("Waiting for monkeys to get back home")
+	c.Logrus.Info("Waiting for monkeys to get back home")
 	wg.Wait()
 
 	timeoutSeconds := int64(c.WatcherTimeout.Seconds())

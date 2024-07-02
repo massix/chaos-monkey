@@ -16,8 +16,8 @@ pipelines:
                 - apk add --no-cache make gcc musl-dev
                 - make test
         trigger: automatic
-  branches:
-    main:
+  tags:
+    'v*.*.*':
       - stage: *build_test
       - stage:
           steps:

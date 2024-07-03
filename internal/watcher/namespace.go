@@ -8,6 +8,8 @@ import (
 	"time"
 
 	mc "github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,19 +23,114 @@ import (
 type NamespaceWatcher struct {
 	typedcorev1.NamespaceInterface
 	record.EventRecorderLogger
-
 	Logrus         logrus.FieldLogger
 	Client         kubernetes.Interface
 	CmcClient      mc.Interface
 	CrdWatchers    map[string]Watcher
 	Mutex          *sync.Mutex
+	metrics        *nwMetrics
 	RootNamespace  string
 	CleanupTimeout time.Duration
 	WatcherTimeout time.Duration
 	Running        bool
 }
 
+// Close implements Watcher.
+func (n *NamespaceWatcher) Close() error {
+	n.metrics.unregister()
+	return nil
+}
+
+// Metrics for the NamespaceWatcher component
+type nwMetrics struct {
+	// Total number of events handled
+	addedEvents    prometheus.Counter
+	modifiedEvents prometheus.Counter
+	deletedEvents  prometheus.Counter
+
+	// Total number of restarts handled
+	restarts prometheus.Counter
+
+	// Total number of CMCs spawned
+	cmcSpawned prometheus.Counter
+
+	// Total number of *active* CMCs
+	cmcActive prometheus.Gauge
+
+	// How long it took to handle an event
+	eventDuration prometheus.Histogram
+}
+
+func (nw *nwMetrics) unregister() {
+	prometheus.Unregister(nw.addedEvents)
+	prometheus.Unregister(nw.modifiedEvents)
+	prometheus.Unregister(nw.deletedEvents)
+	prometheus.Unregister(nw.restarts)
+	prometheus.Unregister(nw.cmcSpawned)
+	prometheus.Unregister(nw.cmcActive)
+	prometheus.Unregister(nw.eventDuration)
+}
+
 var _ = (Watcher)((*NamespaceWatcher)(nil))
+
+func newNwMetrics(rootNamespace string) *nwMetrics {
+	return &nwMetrics{
+		addedEvents: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "events",
+			Subsystem:   "nswatcher",
+			Help:        "Total number of events handled",
+			ConstLabels: map[string]string{"event_type": "add", "root_namespace": rootNamespace},
+		}),
+		modifiedEvents: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "events",
+			Subsystem:   "nswatcher",
+			Help:        "Total number of events handled",
+			ConstLabels: map[string]string{"event_type": "modify", "root_namespace": rootNamespace},
+		}),
+		deletedEvents: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "events",
+			Subsystem:   "nswatcher",
+			Help:        "Total number of events handled",
+			ConstLabels: map[string]string{"event_type": "delete", "root_namespace": rootNamespace},
+		}),
+
+		restarts: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "restarts",
+			Subsystem:   "nswatcher",
+			Help:        "Total number of restarts handled",
+			ConstLabels: map[string]string{"root_namespace": rootNamespace},
+		}),
+
+		cmcSpawned: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "cmc_spawned",
+			Subsystem:   "nswatcher",
+			Help:        "Total number of CMCs spawned",
+			ConstLabels: map[string]string{"root_namespace": rootNamespace},
+		}),
+
+		cmcActive: promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "cmc_active",
+			Subsystem:   "nswatcher",
+			Help:        "Current active CMC Watchers",
+			ConstLabels: map[string]string{"root_namespace": rootNamespace},
+		}),
+
+		eventDuration: promauto.NewHistogram(prometheus.HistogramOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "event_duration",
+			Subsystem:   "nswatcher",
+			Help:        "How long it took to handle an event (calculated in microseconds)",
+			ConstLabels: map[string]string{"root_namespace": rootNamespace},
+			Buckets:     []float64{0, 5, 10, 20, 50, 100, 500, 1000, 1500, 2000},
+		}),
+	}
+}
 
 func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, rootNamespace string) Watcher {
 	logrus.Infof("Creating new namespace watcher for namespace %s", rootNamespace)
@@ -56,6 +153,7 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		Logrus:         logrus.WithFields(logrus.Fields{"component": "NamespaceWatcher", "rootNamespace": rootNamespace}),
 		CrdWatchers:    map[string]Watcher{},
 		Mutex:          &sync.Mutex{},
+		metrics:        newNwMetrics(rootNamespace),
 		CleanupTimeout: 1 * time.Minute,
 		RootNamespace:  rootNamespace,
 		Running:        false,
@@ -77,6 +175,8 @@ func (n *NamespaceWatcher) IsRunning() bool {
 func (n *NamespaceWatcher) Start(ctx context.Context) error {
 	var err error
 	var wg sync.WaitGroup
+
+	defer n.Close()
 
 	n.Logrus.Infof("Starting watcher, timeout: %s", n.WatcherTimeout)
 
@@ -104,8 +204,11 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 					_ = n.Stop()
 				}
 
+				n.metrics.restarts.Inc()
 				break
 			}
+
+			requestStart := time.Now().UnixMicro()
 
 			ns := evt.Object.(*corev1.Namespace)
 
@@ -126,6 +229,23 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 				n.Logrus.Debug("All is good! Sending event.")
 				n.startCrdWatcher(ctx, ns.Name, &wg)
 				n.Eventf(ns, "Normal", "Added", "CRD Watcher added for %s", ns.Name)
+				n.metrics.addedEvents.Inc()
+
+			case watch.Modified:
+				n.Logrus.Infof("Eventually modifying watcher for %s", ns.Name)
+				if n.IsNamespaceAllowed(ns) {
+					if err := n.addWatcher(ns.Name); err != nil {
+						n.Logrus.Warnf("Error while trying to add CRD watcher: %s", err)
+					} else {
+						n.Logrus.Infof("Starting newly created watcher for %s", ns.Name)
+						n.startCrdWatcher(ctx, ns.Name, &wg)
+					}
+				} else {
+					if err := n.removeWatcher(ns.Name); err != nil {
+						n.Logrus.Warnf("Error while trying to remove CRD watcher: %s", err)
+					}
+				}
+				n.metrics.modifiedEvents.Inc()
 
 			case watch.Deleted:
 				n.Logrus.Infof("Deleting watcher for namespace %s", ns.Name)
@@ -134,8 +254,13 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 				}
 
 				n.Logrus.Debug("All is good! Sending event.")
+				n.metrics.deletedEvents.Inc()
 				n.Eventf(ns, "Normal", "Deleted", "CRD Watcher deleted for %s", ns.Name)
 			}
+
+			requestEnd := time.Now().UnixMicro()
+
+			n.metrics.eventDuration.Observe(float64(requestEnd - requestStart))
 
 		case <-ctx.Done():
 			n.Logrus.Info("Context cancelled")
@@ -163,6 +288,7 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 
 	n.Logrus.Info("Waiting for all CRD Watchers to finish")
 	wg.Wait()
+	n.Logrus.Debug("Unregistering Prometheus metrics")
 	return err
 }
 
@@ -200,6 +326,7 @@ func (n *NamespaceWatcher) removeWatcher(namespace string) error {
 	if w, ok := n.CrdWatchers[namespace]; ok {
 		err = w.Stop()
 		delete(n.CrdWatchers, namespace)
+		n.metrics.cmcActive.Dec()
 	} else {
 		err = fmt.Errorf("Watcher for namespace %s does not exist", namespace)
 	}
@@ -251,6 +378,9 @@ func (n *NamespaceWatcher) startCrdWatcher(ctx context.Context, namespace string
 			n.Logrus.Errorf("Error while starting CRD Watcher for namespace %s", namespace)
 		}
 	}()
+
+	n.metrics.cmcActive.Inc()
+	n.metrics.cmcSpawned.Inc()
 }
 
 func (n *NamespaceWatcher) restartWatch(ctx context.Context, wg *sync.WaitGroup) (watch.Interface, error) {

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	scalev1 "k8s.io/api/autoscaling/v1"
@@ -26,13 +28,39 @@ type DeploymentWatcher struct {
 	Logrus             logrus.FieldLogger
 	OriginalDeployment *appsv1.Deployment
 	Mutex              *sync.Mutex
+	metrics            *dwMetrics
+	ForceStopChan      chan interface{}
 	MinReplicas        int
 	MaxReplicas        int
 	Timeout            time.Duration
-	ForceStopChan      chan interface{}
 	Running            bool
 	Enabled            bool
 }
+
+// Close implements ConfigurableWatcher.
+func (d *DeploymentWatcher) Close() error {
+	d.metrics.unregister()
+	return nil
+}
+
+type dwMetrics struct {
+	// Total number of deployments rescaled
+	deploymentsRescaled prometheus.Counter
+
+	// Distribution of the number of replicas used
+	randomDistribution prometheus.Histogram
+
+	// Last used scale
+	lastScale prometheus.Gauge
+}
+
+func (dw *dwMetrics) unregister() {
+	prometheus.Unregister(dw.deploymentsRescaled)
+	prometheus.Unregister(dw.randomDistribution)
+	prometheus.Unregister(dw.lastScale)
+}
+
+var _ = (ConfigurableWatcher)((*DeploymentWatcher)(nil))
 
 func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) ConfigurableWatcher {
 	logrus.Infof("Creating new Deployment watcher for %s/%s", deployment.Namespace, deployment.Name)
@@ -52,12 +80,41 @@ func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventR
 
 		Logrus:        logrus.WithFields(logrus.Fields{"component": "DeploymentWatcher", "namespace": deployment.Namespace, "deploymentName": deployment.Name}),
 		Mutex:         &sync.Mutex{},
+		metrics:       newDwMetrics(deployment.Name, deployment.Namespace),
 		MinReplicas:   0,
 		MaxReplicas:   0,
 		Timeout:       0,
 		ForceStopChan: make(chan interface{}),
 		Running:       false,
 		Enabled:       false,
+	}
+}
+
+func newDwMetrics(deploymentName, namespace string) *dwMetrics {
+	constLabels := map[string]string{"namespace": namespace, "deployment": deploymentName}
+	return &dwMetrics{
+		deploymentsRescaled: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Subsystem:   "deploymentwatcher",
+			Name:        "deployments_rescaled",
+			Help:        "Total number of deployments rescaled",
+			ConstLabels: constLabels,
+		}),
+		randomDistribution: promauto.NewHistogram(prometheus.HistogramOpts{
+			Namespace:   "chaos_monkey",
+			Subsystem:   "deploymentwatcher",
+			Name:        "random_distribution",
+			Help:        "Distribution of the number of replicas used",
+			ConstLabels: constLabels,
+			Buckets:     []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+		}),
+		lastScale: promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace:   "chaos_monkey",
+			Subsystem:   "deploymentwatcher",
+			Name:        "last_scale",
+			Help:        "Last value used for replicas of deployment",
+			ConstLabels: constLabels,
+		}),
 	}
 }
 
@@ -103,6 +160,7 @@ func (d *DeploymentWatcher) SetTimeout(v time.Duration) {
 
 // Start implements DeploymentWatcherI.
 func (d *DeploymentWatcher) Start(ctx context.Context) error {
+	defer d.Close()
 	d.Logrus.Infof("Starting Chaos Monkey")
 	timer := time.NewTimer(d.getTimeout())
 
@@ -147,6 +205,8 @@ func (d *DeploymentWatcher) Start(ctx context.Context) error {
 	}
 
 	d.Logrus.Info("Chaos Monkey stopped")
+	d.Logrus.Debug("Unregistering Prometheus metrics")
+
 	return nil
 }
 
@@ -166,6 +226,9 @@ func (d *DeploymentWatcher) scaleDeployment(newReplicas int) error {
 	if err == nil {
 		d.Logrus.Debugf("Successfully scaled to %d replicas, publishing event", res.Spec.Replicas)
 		d.Eventf(d.getOriginalDeployment(), corev1.EventTypeNormal, "ChaosMonkey", "Converted to %d replicas", res.Spec.Replicas)
+		d.metrics.deploymentsRescaled.Inc()
+		d.metrics.randomDistribution.Observe(float64(newReplicas))
+		d.metrics.lastScale.Set(float64(newReplicas))
 	}
 
 	return err

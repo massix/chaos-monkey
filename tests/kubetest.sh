@@ -2,6 +2,7 @@
 
 KUBECTL=$(which kubectl)
 CLUSTER_NAME="${TERRAFORM_CLUSTER_NAME:-chaosmonkey-cluster}"
+CURL=$(which curl)
 
 set -eo pipefail
 
@@ -47,6 +48,12 @@ debug() {
 
 err() {
   log error "$*"
+
+  if [[ "${PF_PID}" != "" ]]; then
+    info "Force stopping port-forward after failure"
+    kill -15 "${PF_PID}"
+  fi
+
   exit 1
 }
 
@@ -157,11 +164,27 @@ checkNumberPods() {
   done
 }
 
+checkMetric() {
+  local hostname="$1"
+  local metricName="$2"
+
+  info "Checking presence of metric $metricName @ $hostname"
+  if ! ${CURL} -s "${hostname}/metrics" | grep "${metricName}" 2>/dev/null >/dev/null; then
+    err "Metric ${metricName} not found on ${hostname}"
+  fi
+}
+
 debug "Checking kubectl @ ${KUBECTL}"
 if [[ -z "${KUBECTL}" ]]; then
   err "Please install kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl/"
 fi
 info "Kubectl found at ${KUBECTL}"
+
+debug "Checking curl @ ${CURL}"
+if [[ -z "${CURL}" ]]; then
+  err "Please install curl: https://curl.se/download.html"
+fi
+info "Curl found at ${CURL}"
 
 # Check if the cluster has been started
 debug "Check that ${CLUSTER_NAME} exists"
@@ -188,7 +211,7 @@ info "Checking pods"
 for ns in target chaosmonkey; do
   debug "Checking if pods in namespace ${ns} are ready"
   if ! ${KUBECTL} get pods --namespace=${ns} | grep Running &>/dev/null; then
-    err "Pods in namespace ${ns} target are not ready"
+    err "Pods in namespace ${ns} are not ready"
   fi
 done
 
@@ -197,6 +220,13 @@ deploymentCount=$(${KUBECTL} get deployments --namespace=chaosmonkey --no-header
 debug "chaosmonkey namespace contains ${deploymentCount} deployment(s)"
 if [[ ${deploymentCount} != 1 ]]; then
   err "chaosmonkey namespace should contain 1 deployment"
+fi
+
+info "Checking service"
+serviceCount=$(${KUBECTL} get services --namespace=chaosmonkey --no-headers | wc -l)
+debug "chaosmonkey namespace contains ${serviceCount} services"
+if [[ ${serviceCount} != 1 ]]; then
+  err "chaosmonkey namespace should contain 1 service"
 fi
 
 deploymentCount=$(${KUBECTL} get deployments --namespace=target --no-headers | wc -l)
@@ -294,5 +324,50 @@ checkPods "app=${disruptScale}"
 
 info "Checking that we still have 2 pods"
 checkNumberPods "app=${disruptScale}" 2
+
+info "Checking that chaosmonkey did not crash even once"
+restartCount=$(${KUBECTL} -n chaosmonkey get pods -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')
+debug "Restart count: ${restartCount}"
+if [ "${restartCount}" -ne 0 ]; then
+  err "Chaosmonkey crashed :("
+fi
+
+info "Checking exposed metrics by ChaosMonkey"
+debug "Opening port-forward"
+${KUBECTL} port-forward -n chaosmonkey svc/chaos-monkey 9090:80 >/dev/null &
+
+PF_PID="$!"
+HOSTNAME="http://localhost:9090"
+debug "port-forward pid is ${PF_PID}"
+sleep 2
+
+ALLMETRICS=(
+  "chaos_monkey_nswatcher_events"
+  "chaos_monkey_nswatcher_event_duration_bucket"
+  "chaos_monkey_nswatcher_cmc_spawned"
+  "chaos_monkey_nswatcher_cmc_active"
+  "chaos_monkey_nswatcher_restarts"
+  "chaos_monkey_crdwatcher_events"
+  "chaos_monkey_crdwatcher_pw_spawned"
+  "chaos_monkey_crdwatcher_pw_active"
+  "chaos_monkey_crdwatcher_dw_spawned"
+  "chaos_monkey_crdwatcher_dw_active"
+  "chaos_monkey_crdwatcher_event_duration_bucket"
+  "chaos_monkey_crdwatcher_restarts"
+  "chaos_monkey_podwatcher_pods_added"
+  "chaos_monkey_podwatcher_pods_removed"
+  "chaos_monkey_podwatcher_pods_killed"
+  "chaos_monkey_podwatcher_pods_active"
+  "chaos_monkey_podwatcher_restarts"
+  "chaos_monkey_deploymentwatcher_deployments_rescaled"
+  "chaos_monkey_deploymentwatcher_random_distribution"
+  "chaos_monkey_deploymentwatcher_last_scale"
+)
+for m in "${ALLMETRICS[@]}"; do
+  checkMetric $HOSTNAME "$m"
+done
+
+debug "Stopping port-forward"
+kill -15 ${PF_PID}
 
 info "All tests passed!"

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
 	apicorev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,14 +27,66 @@ type PodWatcher struct {
 
 	Logrus        logrus.FieldLogger
 	Mutex         *sync.Mutex
-	Namespace     string
+	ForceStopChan chan interface{}
+	metrics       *pwMetrics
 	LabelSelector string
+	Namespace     string
 	PodList       []*apicorev1.Pod
 	Timeout       time.Duration
 	WatchTimeout  time.Duration
-	ForceStopChan chan interface{}
 	Enabled       bool
 	Running       bool
+}
+
+// Close implements ConfigurableWatcher.
+func (p *PodWatcher) Close() error {
+	p.metrics.unregister()
+	return nil
+}
+
+type pwMetrics struct {
+	// General statistics about the pods
+	podsAdded   prometheus.Counter
+	podsRemoved prometheus.Counter
+	podsActive  prometheus.Gauge
+	podsKilled  prometheus.Counter
+
+	// Number of restarts
+	restarts prometheus.Counter
+}
+
+func (pw *pwMetrics) unregister() {
+	prometheus.Unregister(pw.podsAdded)
+	prometheus.Unregister(pw.podsRemoved)
+	prometheus.Unregister(pw.podsActive)
+	prometheus.Unregister(pw.podsKilled)
+	prometheus.Unregister(pw.restarts)
+}
+
+func newPwMetrics(namespace, combinedLabelSelector string) *pwMetrics {
+	mkCounterOpts := func(name, help string) prometheus.CounterOpts {
+		return prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Subsystem:   "podwatcher",
+			Name:        name,
+			Help:        help,
+			ConstLabels: map[string]string{"namespace": namespace, "label_selector": combinedLabelSelector},
+		}
+	}
+
+	return &pwMetrics{
+		podsAdded:   promauto.NewCounter(mkCounterOpts("pods_added", "Total number of pods added")),
+		podsRemoved: promauto.NewCounter(mkCounterOpts("pods_removed", "Total number of pods removed")),
+		podsKilled:  promauto.NewCounter(mkCounterOpts("pods_killed", "Total number of pods killed")),
+		restarts:    promauto.NewCounter(mkCounterOpts("restarts", "Total number of restarts")),
+		podsActive: promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace:   "chaos_monkey",
+			Subsystem:   "podwatcher",
+			Name:        "pods_active",
+			Help:        "Current number of pods being targeted",
+			ConstLabels: map[string]string{"namespace": namespace, "label_selector": combinedLabelSelector},
+		}),
+	}
 }
 
 var _ = (ConfigurableWatcher)((*PodWatcher)(nil))
@@ -63,6 +117,7 @@ func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorder
 		Timeout:       30 * time.Second,
 		WatchTimeout:  15 * time.Minute,
 		ForceStopChan: make(chan interface{}),
+		metrics:       newPwMetrics(namespace, combinedSelector),
 		Enabled:       true,
 		Running:       false,
 	}
@@ -108,6 +163,8 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 	var err error
 	p.Logrus.Info("Starting pod watcher")
 
+	defer p.Close()
+
 	watchTimeout := int64(p.WatchTimeout.Seconds())
 	w, err := p.Watch(ctx, metav1.ListOptions{
 		Watch:          true,
@@ -135,6 +192,7 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 					p.setRunning(false)
 				}
 
+				p.metrics.restarts.Inc()
 				break
 			}
 
@@ -183,6 +241,7 @@ func (p *PodWatcher) Start(ctx context.Context) error {
 						"Pod got killed by Chaos Monkey",
 					)
 					p.Logrus.Debug("Pod disrupted, event sent!")
+					p.metrics.podsKilled.Inc()
 				}
 			}
 
@@ -218,6 +277,8 @@ func (p *PodWatcher) Stop() error {
 		p.Logrus.Warn("Could not write in channel")
 	}
 
+	p.metrics.unregister()
+
 	return nil
 }
 
@@ -249,6 +310,8 @@ func (p *PodWatcher) addPodToList(pod *apicorev1.Pod) {
 	p.Logrus.Debugf("Current pod list size: %d", len(p.PodList))
 	p.PodList = append(p.PodList, pod)
 	p.Logrus.Debugf("Final pod list size: %d", len(p.PodList))
+	p.metrics.podsAdded.Inc()
+	p.metrics.podsActive.Set(float64(len(p.PodList)))
 }
 
 func (p *PodWatcher) removePodFromList(pod *apicorev1.Pod) {
@@ -261,6 +324,8 @@ func (p *PodWatcher) removePodFromList(pod *apicorev1.Pod) {
 		return v.Name == pod.Name
 	})
 	p.Logrus.Debugf("Final pod list size: %d", len(p.PodList))
+	p.metrics.podsRemoved.Inc()
+	p.metrics.podsActive.Set(float64(len(p.PodList)))
 }
 
 func (p *PodWatcher) getRandomPod() (*apicorev1.Pod, error) {

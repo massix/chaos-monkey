@@ -12,6 +12,8 @@ import (
 	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned/scheme"
 	cmv1alpha1 "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1alpha1"
 	"github.com/massix/chaos-monkey/internal/apis/v1alpha1"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
 	apiappsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +37,7 @@ type CrdWatcher struct {
 
 	Logrus             logrus.FieldLogger
 	Client             kubernetes.Interface
+	metrics            *crdMetrics
 	Mutex              *sync.Mutex
 	DeploymentWatchers map[string]*WatcherConfiguration
 	ForceStopChan      chan interface{}
@@ -44,7 +47,113 @@ type CrdWatcher struct {
 	Running            bool
 }
 
+type crdMetrics struct {
+	// Total number of events handled
+	addedEvents    prometheus.Counter
+	modifiedEvents prometheus.Counter
+	deletedEvents  prometheus.Counter
+
+	// Total number of restarts
+	restarts prometheus.Counter
+
+	// Metrics for PodWatchers
+	pwSpawned prometheus.Counter
+	pwActive  prometheus.Gauge
+
+	// Metrics for DeploymentWatchers
+	dwSpawned prometheus.Counter
+	dwActive  prometheus.Gauge
+
+	// How long it takes to handle an event
+	eventDuration prometheus.Histogram
+}
+
+func (crd *crdMetrics) unregister() {
+	prometheus.Unregister(crd.addedEvents)
+	prometheus.Unregister(crd.modifiedEvents)
+	prometheus.Unregister(crd.deletedEvents)
+	prometheus.Unregister(crd.restarts)
+	prometheus.Unregister(crd.pwSpawned)
+	prometheus.Unregister(crd.pwActive)
+	prometheus.Unregister(crd.dwSpawned)
+	prometheus.Unregister(crd.dwActive)
+	prometheus.Unregister(crd.eventDuration)
+}
+
 var _ = (Watcher)((*CrdWatcher)(nil))
+
+func newCrdMetrics(namespace string) *crdMetrics {
+	return &crdMetrics{
+		addedEvents: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "events",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of events handled",
+			ConstLabels: map[string]string{"namespace": namespace, "event_type": "add"},
+		}),
+		modifiedEvents: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "events",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of events handled",
+			ConstLabels: map[string]string{"namespace": namespace, "event_type": "modify"},
+		}),
+		deletedEvents: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "events",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of events handled",
+			ConstLabels: map[string]string{"namespace": namespace, "event_type": "delete"},
+		}),
+
+		restarts: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "restarts",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of restarts",
+			ConstLabels: map[string]string{"namespace": namespace},
+		}),
+
+		pwSpawned: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "pw_spawned",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of PodWatchers spawned",
+			ConstLabels: map[string]string{"namespace": namespace},
+		}),
+		pwActive: promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "pw_active",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of PodWatchers active",
+			ConstLabels: map[string]string{"namespace": namespace},
+		}),
+
+		dwSpawned: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "dw_spawned",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of DeploymentWatchers spawned",
+			ConstLabels: map[string]string{"namespace": namespace},
+		}),
+		dwActive: promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "dw_active",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of DeploymentWatchers active",
+			ConstLabels: map[string]string{"namespace": namespace},
+		}),
+
+		eventDuration: promauto.NewHistogram(prometheus.HistogramOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "event_duration",
+			Subsystem:   "crdwatcher",
+			Help:        "How long it took to handle an event (calculated in microseconds)",
+			ConstLabels: map[string]string{"namespace": namespace},
+			Buckets:     []float64{0, 5, 10, 20, 50, 100, 500, 1000, 1500, 2000},
+		}),
+	}
+}
 
 func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interface, recorder record.EventRecorderLogger, namespace string) Watcher {
 	// Build my own recorder here
@@ -69,7 +178,14 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 		CleanupTimeout:     15 * time.Minute,
 		WatcherTimeout:     24 * time.Hour,
 		Running:            false,
+		metrics:            newCrdMetrics(namespace),
 	}
+}
+
+// Close implements io.Closer
+func (c *CrdWatcher) Close() error {
+	c.metrics.unregister()
+	return nil
 }
 
 // IsRunning implements Watcher.
@@ -82,6 +198,7 @@ func (c *CrdWatcher) IsRunning() bool {
 
 // Start implements Watcher.
 func (c *CrdWatcher) Start(ctx context.Context) error {
+	defer c.Close()
 	c.Logrus.Info("Starting CRD watcher")
 	var err error
 	var wg sync.WaitGroup
@@ -110,9 +227,11 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 					c.setRunning(false)
 				}
 
+				c.metrics.restarts.Inc()
 				break
 			}
 
+			startTime := time.Now().UnixMicro()
 			cmc := evt.Object.(*v1alpha1.ChaosMonkeyConfiguration)
 			c.Logrus.Debugf("Received %s event for %+v", evt.Type, cmc)
 
@@ -147,6 +266,7 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 
 				c.Logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Started", "Watcher started for deployment %s", dep.Name)
+				c.metrics.addedEvents.Inc()
 
 			case watch.Modified:
 				c.Logrus.Infof("Received MODIFIED event for %s, for deployment %s", cmc.Name, cmc.Spec.DeploymentName)
@@ -157,6 +277,7 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 
 				c.Logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Modified", "Watcher modified for deployment %s", cmc.Spec.DeploymentName)
+				c.metrics.modifiedEvents.Inc()
 
 			case watch.Deleted:
 				c.Logrus.Infof("Received DELETED event for %s, for deployment %s", cmc.Name, cmc.Spec.DeploymentName)
@@ -167,7 +288,11 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 
 				c.Logrus.Debug("All is good! Publishing event.")
 				c.EventRecorderLogger.Eventf(cmc, "Normal", "Deleted", "Watcher deleted for deployment %s", cmc.Spec.DeploymentName)
+				c.metrics.deletedEvents.Inc()
 			}
+
+			endTime := time.Now().UnixMicro()
+			c.metrics.eventDuration.Observe(float64(endTime - startTime))
 
 		case <-ctx.Done():
 			c.Logrus.Info("Watcher context done")
@@ -198,6 +323,8 @@ func (c *CrdWatcher) Start(ctx context.Context) error {
 	c.Mutex.Unlock()
 
 	wg.Wait()
+
+	c.Logrus.Debug("Unregistering Prometheus metrics")
 	return err
 }
 
@@ -259,9 +386,11 @@ func (c *CrdWatcher) addWatcher(cmc *v1alpha1.ChaosMonkeyConfiguration, dep *api
 
 		c.Logrus.Debugf("Configuring watcher with %+v", cmc.Spec)
 		newWatcher = DefaultPodFactory(c.Client, nil, dep.Namespace, strings.Join(combinedLabelSelector, ","))
+		c.metrics.pwSpawned.Inc()
 	} else {
 		c.Logrus.Debug("Creating new deployment watcher")
 		newWatcher = DefaultDeploymentFactory(c.Client, nil, dep)
+		c.metrics.dwSpawned.Inc()
 	}
 
 	// Configure it
@@ -289,12 +418,29 @@ func (c *CrdWatcher) startWatcher(ctx context.Context, forDeployment string, wg 
 		return fmt.Errorf("Watcher for deployment %s does not exist", forDeployment)
 	}
 
+	var activeMetric prometheus.Gauge
+
+	switch wc.Watcher.(type) {
+	case *PodWatcher:
+		activeMetric = c.metrics.pwActive
+	case *DeploymentWatcher:
+		activeMetric = c.metrics.dwActive
+	}
+
+	if activeMetric != nil {
+		activeMetric.Inc()
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		c.Logrus.Debugf("Starting watcher for %s", forDeployment)
 		if err := wc.Watcher.Start(ctx); err != nil {
 			c.Logrus.Errorf("Error while starting watcher: %s", err)
+		}
+
+		if activeMetric != nil {
+			activeMetric.Dec()
 		}
 	}()
 
@@ -345,9 +491,11 @@ func (c *CrdWatcher) modifyWatcher(ctx context.Context, cmc *v1alpha1.ChaosMonke
 			}
 
 			newWatcher = DefaultPodFactory(c.Client, nil, dep.Namespace, allLabels...)
+			c.metrics.pwSpawned.Inc()
 		} else {
 			c.Logrus.Debug("Creating new Deployment watcher")
 			newWatcher = DefaultDeploymentFactory(c.Client, nil, dep)
+			c.metrics.dwSpawned.Inc()
 		}
 
 		// Configure the watcher
@@ -359,12 +507,28 @@ func (c *CrdWatcher) modifyWatcher(ctx context.Context, cmc *v1alpha1.ChaosMonke
 		// Start the watcher
 		c.Logrus.Info("Starting the newly created watcher")
 
+		var activeMetric prometheus.Gauge
+		switch newWatcher.(type) {
+		case *PodWatcher:
+			activeMetric = c.metrics.pwActive
+		case *DeploymentWatcher:
+			activeMetric = c.metrics.dwActive
+		}
+
+		if activeMetric != nil {
+			activeMetric.Inc()
+		}
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			c.Logrus.Debugf("Starting watcher for %s", cmc.Spec.DeploymentName)
 			if err := newWatcher.Start(ctx); err != nil {
 				c.Logrus.Errorf("Error while starting watcher: %s", err)
+			}
+
+			if activeMetric != nil {
+				activeMetric.Dec()
 			}
 		}()
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
 	"github.com/massix/chaos-monkey/internal/configuration"
 	"github.com/massix/chaos-monkey/internal/watcher"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -63,8 +65,26 @@ func main() {
 		}
 	}()
 
+	// Spawn the HTTP Server for Prometheus in background
+	srv := &http.Server{
+		Handler: promhttp.Handler(),
+		Addr:    "0.0.0.0:9000",
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := srv.ListenAndServe(); err != nil {
+			log.Warnf("Could not spawn Prometheus handler: %s", err)
+		}
+	}()
+
 	// Wait for a signal to arrive
 	<-s
+
+	if err := srv.Shutdown(context.Background()); err != nil {
+		log.Warnf("Could not shutdown Prometheus handler: %s", err)
+	}
 
 	log.Info("Shutting down...")
 	cancel()

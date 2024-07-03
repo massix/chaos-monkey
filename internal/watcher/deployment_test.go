@@ -28,6 +28,8 @@ func TestDeploymentWatcher_Create(t *testing.T) {
 			Namespace: "test-1",
 		},
 	})
+
+	defer w.Close()
 	if w.IsRunning() {
 		t.Errorf("Watcher should not be running")
 	}

@@ -57,10 +57,16 @@ func (f *FakeCrdWatcher) Stop() error {
 	return nil
 }
 
+func (f *FakeCrdWatcher) Close() error {
+	return nil
+}
+
 var cmcClientset = fakecmc.NewSimpleClientset()
 
 func TestNamespaceWatcher_Create(t *testing.T) {
 	w := watcher.DefaultNamespaceFactory(kubernetes.NewSimpleClientset(), cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey")
+	defer w.Close()
+
 	if w.IsRunning() {
 		t.Errorf("Watcher should not be running")
 	}

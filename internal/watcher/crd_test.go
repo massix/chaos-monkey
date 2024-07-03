@@ -92,10 +92,16 @@ func (f *FakeDeploymentWatcher) Stop() error {
 	return nil
 }
 
+func (f *FakeDeploymentWatcher) Close() error {
+	return nil
+}
+
 var _ watcher.ConfigurableWatcher = &FakeDeploymentWatcher{}
 
 func TestCRDWatcher_Create(t *testing.T) {
 	w := watcher.DefaultCrdFactory(kubernetes.NewSimpleClientset(), cmc.NewSimpleClientset(), record.NewFakeRecorder(1024), "chaos-monkey")
+	defer w.Close()
+
 	if w.IsRunning() {
 		t.Fail()
 	}

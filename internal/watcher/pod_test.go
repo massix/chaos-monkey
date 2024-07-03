@@ -36,6 +36,8 @@ func TestPodWatcher_Create(t *gtest.T) {
 		t.Fatal("Failed to create pod watcher")
 	}
 
+	defer p.Close()
+
 	if p.Timeout != 30*time.Second {
 		t.Errorf("Expected timeout to be 30 seconds, got %s", p.Timeout)
 	}

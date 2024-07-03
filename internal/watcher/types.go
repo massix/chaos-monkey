@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"io"
 	"time"
 
 	mc "github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
@@ -11,6 +12,7 @@ import (
 )
 
 type Watcher interface {
+	io.Closer
 	Start(ctx context.Context) error
 	Stop() error
 	IsRunning() bool

@@ -206,29 +206,35 @@ resource "kubernetes_cluster_role_binding" "chaos-monkey-bind" {
 }
 
 resource "kubernetes_deployment" "chaos-monkey-deployment" {
+  timeouts {
+    create = "30s"
+    delete = "30s"
+    update = "30s"
+  }
+
   metadata {
     name      = "chaos-monkey"
     namespace = kubernetes_namespace.chaosmonkey.id
     labels = {
-      "fr.arnal.app/name" = "chaos-monkey"
+      "apps.massix.github.io/name" = "chaos-monkey"
     }
     annotations = {
-      "fr.arnal.app/image-id"       = docker_image.chaos-monkey-image.id
-      "fr.arnal.app/dockerfile-sha" = sha256(file("${path.module}/Dockerfile"))
+      "apps.massix.github.io/image-id"       = docker_image.chaos-monkey-image.id
+      "apps.massix.github.io/dockerfile-sha" = sha256(file("${path.module}/Dockerfile"))
     }
   }
 
   spec {
     selector {
       match_labels = {
-        "fr.arnal.app/name" = "chaos-monkey"
+        "apps.massix.github.io/name" = "chaos-monkey"
       }
     }
 
     template {
       metadata {
         labels = {
-          "fr.arnal.app/name" = "chaos-monkey"
+          "apps.massix.github.io/name" = "chaos-monkey"
         }
       }
       spec {
@@ -240,6 +246,11 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
           env {
             name  = "CHAOSMONKEY_LOGLEVEL"
             value = "debug"
+          }
+          port {
+            container_port = 9000
+            name           = "metrics"
+            protocol       = "TCP"
           }
         }
       }
@@ -258,6 +269,27 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
       shell_script.inject-image,
       kubectl_manifest.crd
     ]
+  }
+}
+
+resource "kubernetes_service" "chaos-monkey-service" {
+  metadata {
+    name      = "chaos-monkey"
+    namespace = kubernetes_namespace.chaosmonkey.id
+    annotations = {
+      "prometheus.io/scrape" = "true"
+    }
+  }
+  spec {
+    type = "ClusterIP"
+    selector = {
+      "apps.massix.github.io/name" = "chaos-monkey"
+    }
+    port {
+      target_port = "metrics"
+      port        = 80
+      name        = "metrics"
+    }
   }
 }
 

@@ -183,6 +183,40 @@ The value is not case-sensitive.
 
 Invalid or empty values will make ChaosMonkey default to the `info` level.
 
+## Observability
+The Chaos Monkey exposes some metrics using the [Prometheus](https://prometheus.io/) library and format.
+
+This is an _evolving_ list of metrics currently exposed, for more details please take a look
+in the code under the corresponding service (all the services in the [watcher folder](./internal/watcher/) expose
+some sort of metrics).
+
+All the events use the prefix `chaos_monkey` which, for readability issues, is not repeated in the
+table below.
+
+| Name                                   | Description                             | Type      |
+|----------------------------------------|-----------------------------------------|-----------|
+| nswatcher_events                       | events handled by the nswatcher         | Counter   |
+| nswatcher_event_duration               | duration of each event in microseconds  | Histogram |
+| nswatcher_cmc_spawned                  | crd services spawned                    | Counter   |
+| nswatcher_cmc_active                   | currently active crd                    | Gauge     |
+| nswatcher_restarts                     | timeouts happened from K8S APIs         | Counter   |
+| crdwatcher_events                      | events handled by the crd watcher       | Counter   |
+| crdwatcher_pw_spawned                  | PodWatchers spawned                     | Counter   |
+| crdwatcher_pw_active                   | PodWatchers currently active            | Gauge     |
+| crdwatcher_dw_spawned                  | DeploymentWatchers spawned              | Counter   |
+| crdwatcher_dw_active                   | DeploymentWatchers active               | Gauge     |
+| crdwatcher_restarts                    | timeouts happened from K8S APIs         | Counter   |
+| podwatcher_pods_added                  | Pods having been added to the list      | Counter   |
+| podwatcher_pods_removed                | Pods having been removed from the list  | Counter   |
+| podwatcher_pods_killed                 | Pods having been killed                 | Counter   |
+| podwatcher_pods_active                 | Pods currently being targeted           | Gauge     |
+| podwatcher_restarts                    | timeouts happened from K8S APIs         | Counter   |
+| deploymentwatcher_deployments_rescaled | deployments having been rescaled        | Counter   |
+| deploymentwatcher_random_distribution  | random distribution of deployments      | Histogram |
+| deploymentwatcher_last_scale           | last value used to scale the deployment | Gauge     |
+
+
+
 ## Development
 All contributions are welcome, of course. Feel free to open an issue or submit a
 pull request. If you want to develop and test locally, you need to install:

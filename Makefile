@@ -32,9 +32,9 @@ test:
 	CGO_ENABLED=1 $(GO) test -v -race ./...
 
 clean:
-	$(TERRAFORM) destroy --auto-approve
+	$(TERRAFORM) destroy --auto-approve || true
 	rm -rf ./bin
-	rm *-cluster-config
+	rm -f *-cluster-config
 
 cluster-test: bin/$(APPNAME)
 	$(TERRAFORM) apply --auto-approve

@@ -33,8 +33,11 @@ to the Kubernetes API, which means that the first events we receive are syntheti
 the `ADDED` and the `DELETED` events accordingly.
 
 Basically, it spawns a new [goroutine](https://go.dev/tour/concurrency/1) with a
-[CRD Watcher](#crd-watcher) everytime a new namespace is detected and it stops the
+[CRD Watcher](#crd-watcher) every time a new namespace is detected and it stops the
 corresponding goroutine when a namespace is deleted.
+
+In the future, there will be the possibility to blacklist (or whitelist) some namespaces
+depending on an annotation.
 
 ### CRD Watcher
 We make use of a
@@ -215,7 +218,12 @@ table below.
 | deploymentwatcher_random_distribution  | random distribution of deployments      | Histogram |
 | deploymentwatcher_last_scale           | last value used to scale the deployment | Gauge     |
 
-
+In the [Makefile](./Makefile) there is also a target `deploy-monitoring` used to deploy a very
+bare bone and simple monitoring stack which includes your classic Prometheus and Grafana, with
+no persistence enabled.  The Grafana will be loaded with three dashboards:
+- `node-exporter-full` to have some live statistics about your locally running K8S cluster;
+- `kube-state-metrics-v2` to have some statistics about the internals of K8S, useful to monitor how the ChaosMonkey is behaving;
+- `chaos-monkey`, for which the source is available [here](./assets/grafana-dashboard.json) and exploits some of the metrics of the table above.
 
 ## Development
 All contributions are welcome, of course. Feel free to open an issue or submit a

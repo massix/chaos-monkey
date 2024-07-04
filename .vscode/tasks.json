@@ -40,7 +40,12 @@
       "group": "test",
       "dependsOn": [
         "Create cluster"
-      ]
+      ],
+      "options": {
+        "env": {
+          "TEST_DEBUG": "true"
+        }
+      }
     }
   ]
 }

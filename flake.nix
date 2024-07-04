@@ -19,6 +19,8 @@
           kustomize
           kind
           kubernetes-code-generator
+          curl
+          cocogitto
         ];
       };
     };

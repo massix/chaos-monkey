@@ -1,0 +1,54 @@
+persistence:
+  enabled: false
+admin:
+  existingSecret: grafana
+  userKey: admin-username
+  passwordKey: admin-password
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-server.monitoring.svc.cluster.local
+        isDefault: true
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: true
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+      - name: 'external'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: true
+        editable: false
+        options:
+          path: /var/lib/grafana/dashboards/external
+dashboardsConfigMaps:
+  default: grafana-dashboard
+dashboards:
+  external:
+    node-exporter-full:
+      gnetId: 1860
+      revision: 37
+      datasource: Prometheus
+    kube-state-metrics-v2:
+      gnetId: 13332
+      revision: 12
+      datasource: Prometheus
+sidecar:
+  datasources:
+    enabled: true
+  dashboards:
+    enabled: true
+  plugins:
+    enabled: true

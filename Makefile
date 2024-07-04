@@ -39,3 +39,34 @@ clean:
 cluster-test: bin/$(APPNAME)
 	$(TERRAFORM) apply --auto-approve
 
+# Deploy a simple monitoring stack onto the existing cluster
+# This is mainly used for local testing
+deploy-monitoring: cluster-test
+	kubectl config use-context kind-chaosmonkey-cluster
+	kubectl delete namespace monitoring --now=true --ignore-not-found=true
+	kubectl create namespace monitoring
+	kubectl create secret generic \
+		-n monitoring \
+		grafana \
+		--from-literal=admin-username=grafana \
+		--from-literal=admin-password=grafana
+	kubectl create configmap \
+		-n monitoring \
+		grafana-dashboard \
+		--from-file=chaos-monkey.json=assets/grafana-dashboard.json
+	helm install prometheus prometheus \
+		--repo https://prometheus-community.github.io/helm-charts \
+		-n monitoring \
+		--create-namespace \
+		--set "server.persistentVolume.enabled=false" \
+		--set "alertmanager.enabled=false" \
+		--set "prometheus-node-exporter.enabled=true" \
+		--set "prometheus-pushgateway.enabled=false" \
+		--set "kube-state-metrics.enabled=true"
+	helm install grafana grafana \
+		--repo https://grafana.github.io/helm-charts \
+		-n monitoring \
+		--create-namespace \
+		--values ./assets/grafana-values.yaml
+
+

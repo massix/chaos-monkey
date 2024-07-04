@@ -1,0 +1,4 @@
+tag_prefix = "v"
+branch_whitelist = ["main"]
+ignore_merge_commits = true
+skip_ci = "[ci skip]"

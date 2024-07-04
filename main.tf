@@ -45,6 +45,8 @@ resource "kind_cluster" "default" {
 resource "docker_image" "chaos-monkey-image" {
   name = "chaos-monkey:dev"
 
+  keep_locally = false
+
   build {
     context      = path.module
     dockerfile   = "Dockerfile"
@@ -82,9 +84,6 @@ resource "kubernetes_namespace" "chaosmonkey" {
 resource "kubernetes_namespace" "target-namespace" {
   metadata {
     name = "target"
-    labels = {
-      "chaosmonkey.massix.github.io/enabled" = "enabled"
-    }
   }
 }
 
@@ -246,6 +245,10 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
           env {
             name  = "CHAOSMONKEY_LOGLEVEL"
             value = "debug"
+          }
+          env {
+            name  = "CHAOSMONKEY_BEHAVIOR"
+            value = "AllowAll"
           }
           port {
             container_port = 9000

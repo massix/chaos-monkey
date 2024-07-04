@@ -174,6 +174,26 @@ checkMetric() {
   fi
 }
 
+checkAllPodsNoChanges() {
+  local counter=0
+  local cpList
+  local newCpList
+
+  cpList=$(${KUBECTL} get pods -n target -o jsonpath='{.items[*].metadata.name}')
+  newCpList=$(${KUBECTL} get pods -n target -o jsonpath='{.items[*].metadata.name}')
+
+  while [[ $counter -lt 5 ]]; do
+    if [[ "${cpList}" == "${newCpList}" ]]; then
+      info "Pods did not change ($((5 - counter)) loops left)"
+      sleep 10
+    else
+      err "Pods have changed"
+    fi
+
+    counter=$((counter + 1))
+  done
+}
+
 debug "Checking kubectl @ ${KUBECTL}"
 if [[ -z "${KUBECTL}" ]]; then
   err "Please install kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl/"
@@ -369,5 +389,81 @@ done
 
 debug "Stopping port-forward"
 kill -15 ${PF_PID}
+
+info "Check Behavior"
+
+info "Patching namespace to disable ChaosMonkey"
+if ! ${KUBECTL} patch namespace target --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
+[
+{ "op": "add", "path": "/metadata/labels", "value": {"cm.massix.github.io/namespace": "false"} },
+]
+JSONPATCH
+  err "Could not patch namespace"
+fi
+
+# Wait for the ChaosMonkey to terminate
+sleep 5
+
+info "Checking that chaosmonkey is disabled for target namespace"
+checkAllPodsNoChanges
+
+info "Patching deployment to inject DenyAll"
+if ! ${KUBECTL} patch -n chaosmonkey deploy chaos-monkey --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
+[
+  { "op": "replace", "path": "/spec/template/spec/containers/0/env/1/value", "value": "DenyAll" },
+]
+JSONPATCH
+  err "Could not patch Deployment"
+fi
+
+debug "Waiting for deployment to restart"
+if ! ${KUBECTL} rollout -n chaosmonkey restart deployment chaos-monkey >/dev/null 2>/dev/null; then
+  err "Could not restart deployment"
+fi
+
+if ! ${KUBECTL} rollout -n chaosmonkey status deployment chaos-monkey >/dev/null 2>/dev/null; then
+  err "Could not wait for successful rollout"
+fi
+
+info "Checking that chaosmonkey is still disabled"
+checkAllPodsNoChanges
+
+info "Patch the CMC configurations to their initial values"
+if ! ${KUBECTL} -n target patch cmc chaosmonkey-${disruptScale} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
+[
+  {"op": "replace", "path": "/spec/enabled", "value": true},
+  {"op": "replace", "path": "/spec/podMode", "value": false},
+  {"op": "replace", "path": "/spec/minReplicas", "value": 2},
+  {"op": "replace", "path": "/spec/maxReplicas", "value": 4}
+]
+JSONPATCH
+  err "Could not patch CMC ${disruptScale}"
+fi
+
+if ! ${KUBECTL} -n target patch cmc chaosmonkey-${disruptPods} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
+[
+  {"op": "replace", "path": "/spec/enabled", "value": true},
+  {"op": "replace", "path": "/spec/podMode", "value": true},
+  {"op": "replace", "path": "/spec/minReplicas", "value": 0},
+  {"op": "replace", "path": "/spec/maxReplicas", "value": 1}
+]
+JSONPATCH
+  err "Could not patch CMC ${disruptPods}"
+fi
+
+info "Patch the namespace to enable it"
+if ! ${KUBECTL} patch namespace target --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
+[
+{ "op": "replace", "path": "/metadata/labels/cm.massix.github.io~1namespace", "value": "true" },
+]
+JSONPATCH
+  err "Could not patch namespace"
+fi
+
+info "Check that the pods are changing again"
+checkPods "app=${disruptPods}"
+
+info "Check that the replicas are changing again"
+checkReplicas "${disruptScale}"
 
 info "All tests passed!"

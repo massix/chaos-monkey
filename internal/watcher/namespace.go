@@ -8,6 +8,7 @@ import (
 	"time"
 
 	mc "github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
+	"github.com/massix/chaos-monkey/internal/configuration"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
@@ -23,13 +24,15 @@ import (
 type NamespaceWatcher struct {
 	typedcorev1.NamespaceInterface
 	record.EventRecorderLogger
+
 	Logrus         logrus.FieldLogger
 	Client         kubernetes.Interface
 	CmcClient      mc.Interface
-	CrdWatchers    map[string]Watcher
 	Mutex          *sync.Mutex
+	CrdWatchers    map[string]Watcher
 	metrics        *nwMetrics
 	RootNamespace  string
+	Behavior       configuration.Behavior
 	CleanupTimeout time.Duration
 	WatcherTimeout time.Duration
 	Running        bool
@@ -132,7 +135,7 @@ func newNwMetrics(rootNamespace string) *nwMetrics {
 	}
 }
 
-func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, rootNamespace string) Watcher {
+func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, rootNamespace string, behavior configuration.Behavior) Watcher {
 	logrus.Infof("Creating new namespace watcher for namespace %s", rootNamespace)
 
 	if clientset == nil {
@@ -156,6 +159,7 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		metrics:        newNwMetrics(rootNamespace),
 		CleanupTimeout: 1 * time.Minute,
 		RootNamespace:  rootNamespace,
+		Behavior:       behavior,
 		Running:        false,
 		Client:         clientset,
 		CmcClient:      cmcClientset,
@@ -171,6 +175,33 @@ func (n *NamespaceWatcher) IsRunning() bool {
 	return n.Running
 }
 
+func (n *NamespaceWatcher) IsNamespaceAllowed(namespace *corev1.Namespace) bool {
+	label, ok := namespace.ObjectMeta.Labels[configuration.NamespaceLabel]
+
+	// We allow all and there is no label
+	if n.Behavior == configuration.AllowAll && !ok {
+		return true
+	}
+
+	// We deny all and there is no label
+	if n.Behavior == configuration.DenyAll && !ok {
+		return false
+	}
+
+	// We deny all by default, the label is a whitelist (only if its value is "true")
+	if n.Behavior == configuration.DenyAll {
+		return label == "true"
+	}
+
+	// We allow all by default, everything will let it through, except for "false"
+	if n.Behavior == configuration.AllowAll {
+		return label != "false"
+	}
+
+	// We should never arrive here
+	return false
+}
+
 // Start implements Watcher.
 func (n *NamespaceWatcher) Start(ctx context.Context) error {
 	var err error
@@ -178,7 +209,7 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 
 	defer n.Close()
 
-	n.Logrus.Infof("Starting watcher, timeout: %s", n.WatcherTimeout)
+	n.Logrus.Infof("Starting watcher, timeout: %s, behavior: %s", n.WatcherTimeout, n.Behavior)
 
 	timeoutSeconds := int64(n.WatcherTimeout.Seconds())
 	w, err := n.Watch(ctx, v1.ListOptions{
@@ -220,6 +251,11 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 				_ = n.Stop()
 
 			case watch.Added:
+				if !n.IsNamespaceAllowed(ns) {
+					logrus.Infof("Not creating watcher for %s", ns.Name)
+					continue
+				}
+
 				n.Logrus.Infof("Adding watcher for namespace %s", ns.Name)
 				if err := n.addWatcher(ns.Name); err != nil {
 					logrus.Errorf("Error while trying to add CRD watcher: %s", err)
@@ -245,6 +281,7 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 						n.Logrus.Warnf("Error while trying to remove CRD watcher: %s", err)
 					}
 				}
+
 				n.metrics.modifiedEvents.Inc()
 
 			case watch.Deleted:

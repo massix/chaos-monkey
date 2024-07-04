@@ -36,8 +36,10 @@ Basically, it spawns a new [goroutine](https://go.dev/tour/concurrency/1) with a
 [CRD Watcher](#crd-watcher) every time a new namespace is detected and it stops the
 corresponding goroutine when a namespace is deleted.
 
-In the future, there will be the possibility to blacklist (or whitelist) some namespaces
-depending on an annotation.
+The Namespace can be [configured](#configuration) to either monitor all namespaces by
+default (with an opt-out strategy) or to monitor only the namespaces which contain the
+label `cm.massix.github.io/namespace="true"`. Check the [Configuration](#configuration)
+paragraph for more details.
 
 ### CRD Watcher
 We make use of a
@@ -178,13 +180,35 @@ spec:
 ```
 
 ## Configuration
-The only configuration possible for the ChaosMonkey is setting the minimum log level,
-this is done by setting the environment variable `CHAOSMONKEY_LOGLEVEL` to one of the
-following values: `trace`, `debug`, `info`, `warn`, `error`, `critical` or `panic`.
+There are two configurable parts of the ChaosMonkey (on top of what the [CRD](./crds/chaosmonkey-configuration.yaml)
+already permits of course).
 
-The value is not case-sensitive.
+**Minimum Log Level**: this is configurable using the environment variable `CHAOSMONKEY_LOGLEVEL`,
+it accepts the following self explaining values: `trace`, `debug`, `info`, `warn`, `error`,
+`critical` or `panic` and it sets the minimum log level for all the logging of the ChaosMonkey.
 
-Invalid or empty values will make ChaosMonkey default to the `info` level.
+The value is not case-sensitive, invalid or empty values will make ChaosMonkey default to
+the `info` level.
+
+**Default Behavior**: this is used to configure the way the [Namespace Watcher](#namespace-watcher) should
+behave in regards of additions and modifications of namespaces and it uses the environment
+variable `CHAOSMONKEY_BEHAVIOR`. It currently accepts two values: `AllowAll` or `DenyAll`
+(not case sensitive).
+
+Setting it to `AllowAll` means that by default all namespaces are monitored, if
+you want to opt-out a namespace you **must** create a new label in the
+metadata of the namespace: `cm.massix.github.io/namespace="false"`, this will
+make the Watcher ignore that namespace. All values which are not the string
+`false` will cause the Watcher to take that namespace into account.
+
+Setting it to `DenyAll` means that by default all namespaces are ignored, if
+you want to opt-in a namespace you **must** create a new label in
+the metadata of the namespace: `cm.massix.github.io/namespace="true"`, this will
+make the Watcher take that namespace into account. All values which are not
+the string `true` will cause the Watcher to ignore that namespace.
+
+Injecting an incorrect value or no value at all will have ChaosMonkey use its
+default behavior: `AllowAll`.
 
 ## Observability
 The Chaos Monkey exposes some metrics using the [Prometheus](https://prometheus.io/) library and format.

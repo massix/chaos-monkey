@@ -23,7 +23,7 @@ func main() {
 	log := logrus.WithFields(logrus.Fields{"component": "main"})
 
 	// Get the LogLevel from the environment variable
-	ll, err := configuration.FromEnvironment()
+	ll, err := configuration.LogrusLevelFromEnvironment()
 	if err != nil {
 		log.Warnf("No loglevel provided, using default: %s", logrus.GetLevel())
 	} else {
@@ -48,10 +48,19 @@ func main() {
 		panic(err)
 	}
 
+	log.Info("Configuring default behavior via environment variable")
+	behavior, err := configuration.BehaviorFromEnvironment()
+	if err != nil {
+		log.Warnf("Error while configuring default behavior: %s", err)
+
+		behavior = configuration.AllowAll
+		log.Warnf("Using default behavior: %s", behavior)
+	}
+
 	clientset := kubernetes.NewForConfigOrDie(cfg)
 	cmcClientset := versioned.NewForConfigOrDie(cfg)
 
-	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace)
+	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace, behavior)
 
 	// Hook signals
 	s := make(chan os.Signal, 1)

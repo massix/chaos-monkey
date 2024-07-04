@@ -11,6 +11,7 @@ import (
 
 	typedcmc "github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
 	fakecmc "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/fake"
+	"github.com/massix/chaos-monkey/internal/configuration"
 	"github.com/massix/chaos-monkey/internal/watcher"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -64,7 +65,7 @@ func (f *FakeCrdWatcher) Close() error {
 var cmcClientset = fakecmc.NewSimpleClientset()
 
 func TestNamespaceWatcher_Create(t *testing.T) {
-	w := watcher.DefaultNamespaceFactory(kubernetes.NewSimpleClientset(), cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey")
+	w := watcher.DefaultNamespaceFactory(kubernetes.NewSimpleClientset(), cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll)
 	defer w.Close()
 
 	if w.IsRunning() {
@@ -75,7 +76,7 @@ func TestNamespaceWatcher_Create(t *testing.T) {
 func TestNamespaceWatcher_BasicBehaviour(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientSet := kubernetes.NewSimpleClientset()
-	w := watcher.DefaultNamespaceFactory(clientSet, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.NamespaceWatcher)
+	w := watcher.DefaultNamespaceFactory(clientSet, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll).(*watcher.NamespaceWatcher)
 	w.CleanupTimeout = 1 * time.Second
 
 	// Inject my CRD Factory
@@ -125,11 +126,10 @@ func TestNamespaceWatcher_BasicBehaviour(t *testing.T) {
 	}
 
 	// Foreach watcher, we should have 1 Start and 0 Stop called
-	for ns, crd := range w.CrdWatchers {
+	for _, crd := range w.CrdWatchers {
 		crd := crd.(*FakeCrdWatcher)
 
 		crd.Mutex.Lock()
-		t.Logf("Watcher: %s, Start: %d, Stop: %d", ns, crd.StartedTimes, crd.StoppedTimes)
 		if s := crd.StartedTimes; s != 1 {
 			t.Errorf("Expected 1 Start, got %d", s)
 		}
@@ -142,7 +142,6 @@ func TestNamespaceWatcher_BasicBehaviour(t *testing.T) {
 	w.Mutex.Unlock()
 
 	// Now stop the watcher
-	t.Log("Stopping watcher")
 	if err := w.Stop(); err != nil {
 		t.Error(err)
 	}
@@ -151,7 +150,6 @@ func TestNamespaceWatcher_BasicBehaviour(t *testing.T) {
 		t.Errorf("Watcher should not be running")
 	}
 
-	t.Log("Waiting for the watcher to terminate")
 	<-done
 
 	// We should have 0 watchers remaining
@@ -163,7 +161,7 @@ func TestNamespaceWatcher_BasicBehaviour(t *testing.T) {
 func TestNamespaceWatcher_Error(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := kubernetes.NewSimpleClientset()
-	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey")
+	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll)
 
 	clientset.PrependWatchReactor("namespaces", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
 		fakeWatch := watch.NewFake()
@@ -185,8 +183,6 @@ func TestNamespaceWatcher_Error(t *testing.T) {
 	go func() {
 		if err := w.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "Empty event or error from namespace watcher") {
 			t.Errorf("Expected error, got %+v instead", err)
-		} else {
-			t.Logf("Expected: %s", err)
 		}
 
 		done <- struct{}{}
@@ -205,7 +201,7 @@ func TestNamespaceWatcher_Error(t *testing.T) {
 func TestNamespaceWatcher_Cleanup(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := kubernetes.NewSimpleClientset()
-	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.NamespaceWatcher)
+	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll).(*watcher.NamespaceWatcher)
 	w.CleanupTimeout = 1 * time.Second
 
 	// Add some fake watchers
@@ -258,7 +254,7 @@ func TestNamespaceWatcher_Cleanup(t *testing.T) {
 
 func TestNamespaceWatcher_RestartWatcher(t *testing.T) {
 	clientset := kubernetes.NewSimpleClientset()
-	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey")
+	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll)
 	w.(*watcher.NamespaceWatcher).CleanupTimeout = 1 * time.Second
 	timeAsked := &atomic.Int32{}
 	timeAsked.Store(0)
@@ -303,5 +299,139 @@ func TestNamespaceWatcher_RestartWatcher(t *testing.T) {
 		t.Errorf("Expected 5 restarts, got %d", timeAsked)
 	}
 
+	<-done
+}
+
+func TestNamespaceWatcher_ModifyNamespace(t *testing.T) {
+	fakeWatch := watch.NewFake()
+	clientset := kubernetes.NewSimpleClientset()
+
+	clientset.PrependWatchReactor("namespaces", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
+		return true, fakeWatch, nil
+	})
+
+	watcher.DefaultCrdFactory = func(clientset k.Interface, cmcClientset typedcmc.Interface, recorder record.EventRecorderLogger, namespace string) watcher.Watcher {
+		return &FakeCrdWatcher{Mutex: &sync.Mutex{}}
+	}
+
+	nsWithLabel := func(name, label string) *corev1.Namespace {
+		lbl := map[string]string{
+			"cm.massix.github.io/namespace": label,
+		}
+
+		return &corev1.Namespace{
+			ObjectMeta: v1.ObjectMeta{Name: name, Labels: lbl},
+		}
+	}
+
+	w := watcher.NewNamespaceWatcher(clientset, nil, record.NewFakeRecorder(1024), "chaosmonkey", configuration.AllowAll).(*watcher.NamespaceWatcher)
+	w.WatcherTimeout = 24 * time.Hour
+	w.CleanupTimeout = 300 * time.Millisecond
+
+	done := make(chan interface{})
+	defer close(done)
+
+	go func() {
+		if err := w.Start(context.Background()); err != nil {
+			t.Error(err)
+		}
+
+		done <- nil
+	}()
+
+	checkWatchers := func(t *testing.T, num int) {
+		w.Mutex.Lock()
+		defer w.Mutex.Unlock()
+
+		if cnt := len(w.CrdWatchers); cnt != num {
+			t.Errorf("Expected %d watchers, got %d", num, cnt)
+		}
+	}
+
+	t.Run("AllowAll", func(t *testing.T) {
+		t.Run("ADD", func(t *testing.T) {
+			go func() {
+				// These should all pass
+				fakeWatch.Add(nsWithLabel("test-ok-1", "blabla"))
+				fakeWatch.Add(nsWithLabel("test-ok-2", "true"))
+				fakeWatch.Add(&corev1.Namespace{ObjectMeta: v1.ObjectMeta{Name: "test-ok-3"}})
+			}()
+
+			// We should have exactly 3 watchers registered
+			time.Sleep(300 * time.Millisecond)
+			checkWatchers(t, 3)
+
+			go func() {
+				// These should all be rejected
+				fakeWatch.Add(nsWithLabel("test-ko-1", "false"))
+				fakeWatch.Add(nsWithLabel("test-ko-2", "false"))
+				fakeWatch.Add(nsWithLabel("test-ko-3", "false"))
+			}()
+
+			time.Sleep(300 * time.Millisecond)
+			checkWatchers(t, 3)
+		})
+
+		t.Run("MODIFY", func(t *testing.T) {
+			go func() {
+				// Modifying an existing watcher should remove it from the list
+				fakeWatch.Modify(nsWithLabel("test-ok-1", "false"))
+
+				// Modifying a non existing watcher should not panic
+				fakeWatch.Modify(nsWithLabel("test-notexisting", "false"))
+			}()
+
+			time.Sleep(300 * time.Millisecond)
+			checkWatchers(t, 2)
+		})
+	})
+
+	// Change the behavior to "DenyAll" and reset the watcher
+	w.Mutex.Lock()
+	w.Behavior = configuration.DenyAll
+	w.CrdWatchers = map[string]watcher.Watcher{}
+	w.Mutex.Unlock()
+
+	t.Run("DenyAll", func(t *testing.T) {
+		t.Run("ADD", func(t *testing.T) {
+			go func() {
+				// These should all be rejected
+				fakeWatch.Add(nsWithLabel("test-ko-1", "blabla"))
+				fakeWatch.Add(nsWithLabel("test-ko-2", "false"))
+				fakeWatch.Add(&corev1.Namespace{ObjectMeta: v1.ObjectMeta{Name: "test-ko-3"}})
+			}()
+
+			time.Sleep(300 * time.Millisecond)
+			checkWatchers(t, 0)
+
+			go func() {
+				// These should all be accepted
+				fakeWatch.Add(nsWithLabel("test-ok-1", "true"))
+				fakeWatch.Add(nsWithLabel("test-ok-2", "true"))
+				fakeWatch.Add(nsWithLabel("test-ok-3", "true"))
+			}()
+
+			time.Sleep(300 * time.Millisecond)
+			checkWatchers(t, 3)
+		})
+
+		t.Run("MODIFY", func(t *testing.T) {
+			go func() {
+				// Modifying an existing watcher should remove it from the list
+				fakeWatch.Modify(nsWithLabel("test-ok-1", "blabla"))
+				fakeWatch.Modify(nsWithLabel("test-ok-2", "false"))
+				fakeWatch.Modify(&corev1.Namespace{ObjectMeta: v1.ObjectMeta{Name: "test-ok-3"}})
+
+				// Modifying a watcher which is not in the list should not panic
+				fakeWatch.Modify(nsWithLabel("test-notexisting", "false"))
+				fakeWatch.Modify(&corev1.Namespace{ObjectMeta: v1.ObjectMeta{Name: "test-notexisting-2"}})
+			}()
+
+			time.Sleep(300 * time.Millisecond)
+			checkWatchers(t, 0)
+		})
+	})
+
+	_ = w.Stop()
 	<-done
 }

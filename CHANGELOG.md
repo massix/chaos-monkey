@@ -2,6 +2,27 @@
 
 
 - - -
+## v2.1.0 - 2024-07-05
+#### Build system
+- fix failing clean job [ci skip] - (54e9fad) - Massimo Gengarelli
+- change the trigger for bitbucket [ci skip] - (5e73828) - Massimo Gengarelli
+#### Continuous Integration
+- fix cog configuration for GitHub - (6dfa6b2) - Massimo Gengarelli
+- automatic creation of release - (2401430) - Massimo Gengarelli
+#### Documentation
+- fix the dates in the changelog [ci skip] - (c54b8ce) - Massimo Gengarelli
+- include CHANGELOG.md file - (be0704a) - Massimo Gengarelli
+#### Features
+- **(monitoring)** instrument code using Prometheus - (704201a) - Massimo Gengarelli
+- **(watcher)** implement configurable behavior for the nswatcher - (a07be7f) - Massimo Gengarelli
+#### Miscellaneous Chores
+- bump version in Makefile - (41dea50) - Massimo Gengarelli
+- include LICENSE file - (a1d0fb9) - Massimo Gengarelli
+- configuration file for cocogitto [ci skip] - (9eaf5ab) - Massimo Gengarelli
+- make it easy to deploy a very basic monitoring stack - (ee59b85) - Massimo Gengarelli
+
+- - -
+
 
 ## v2.0.4 - 2024-07-02
 #### Bug Fixes

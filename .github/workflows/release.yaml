@@ -43,18 +43,23 @@ jobs:
           git-user: 'github-actions[bot]'
           git-user-email: 'github-actions@github.com'
       - name: Bump version
+        id: version
         run: |
           make image-tag
           cog bump --version "$(make image-tag)"
           cog changelog --at "v$(make image-tag)" > tmp.md
+          echo "version=$(make image-tag)" >> $GITHUB_OUTPUT
       - name: Push back to repository
         run: |
           git config user.email "github-actions@github.com"
           git config user.name "github-actions[bot]"
           git push
+          git push --tags
       - uses: softprops/action-gh-release@v2
         with:
           body_path: tmp.md
           generate_release_notes: true
           make_latest: "true"
           draft: false
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}

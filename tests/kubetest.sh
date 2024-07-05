@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
-KUBECTL=$(which kubectl)
+KUBECTL=$(which kubectl 2>/dev/null)
+CURL=$(which curl 2>/dev/null)
+JQ=$(which jq 2>/dev/null)
 CLUSTER_NAME="${TERRAFORM_CLUSTER_NAME:-chaosmonkey-cluster}"
-CURL=$(which curl)
 
 set -eo pipefail
 
@@ -55,6 +56,19 @@ err() {
   fi
 
   exit 1
+}
+
+# Helper function to detect whether a given program is installed or not
+checkProgram() {
+  local programName="$1"
+  shift
+  local errorMessage="$*"
+
+  debug "Checking ${programName}"
+
+  if ! type "${programName}" 2>/dev/null >/dev/null; then
+    err "${errorMessage}"
+  fi
 }
 
 # Helper function to check that the replicas of a given deployment change over time
@@ -194,17 +208,9 @@ checkAllPodsNoChanges() {
   done
 }
 
-debug "Checking kubectl @ ${KUBECTL}"
-if [[ -z "${KUBECTL}" ]]; then
-  err "Please install kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl/"
-fi
-info "Kubectl found at ${KUBECTL}"
-
-debug "Checking curl @ ${CURL}"
-if [[ -z "${CURL}" ]]; then
-  err "Please install curl: https://curl.se/download.html"
-fi
-info "Curl found at ${CURL}"
+checkProgram kubectl "Please install kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl/"
+checkProgram curl "Please install curl: https://curl.se/download.html"
+checkProgram jq "Please install jq: https://stedolan.github.io/jq/download/"
 
 # Check if the cluster has been started
 debug "Check that ${CLUSTER_NAME} exists"
@@ -386,6 +392,14 @@ ALLMETRICS=(
 for m in "${ALLMETRICS[@]}"; do
   checkMetric $HOSTNAME "$m"
 done
+
+info "Checking health endpoint"
+EP_RESULT=$(${CURL} -s "http://localhost:9090/health")
+
+debug "Checking status"
+if [[ "$(echo "${EP_RESULT}" | jq -r '.status')" != "up" ]]; then
+  err "Status is not ok: ${EP_RESULT}"
+fi
 
 debug "Stopping port-forward"
 kill -15 ${PF_PID}

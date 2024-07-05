@@ -211,7 +211,12 @@ Injecting an incorrect value or no value at all will have ChaosMonkey use its
 default behavior: `AllowAll`.
 
 ## Observability
-The Chaos Monkey exposes some metrics using the [Prometheus](https://prometheus.io/) library and format.
+The Chaos Monkey has two observability endpoints available, both exposed by the HTTP server
+running at port 9000 (not configurable).
+
+### Prometheus
+The Chaos Monkey exposes some metrics using the [Prometheus](https://prometheus.io/) library and format, the metrics are all
+available under the `/metrics` endpoint.
 
 This is an _evolving_ list of metrics currently exposed, for more details please take a look
 in the code under the corresponding service (all the services in the [watcher folder](./internal/watcher/) expose
@@ -248,6 +253,11 @@ no persistence enabled.  The Grafana will be loaded with three dashboards:
 - `node-exporter-full` to have some live statistics about your locally running K8S cluster;
 - `kube-state-metrics-v2` to have some statistics about the internals of K8S, useful to monitor how the ChaosMonkey is behaving;
 - `chaos-monkey`, for which the source is available [here](./assets/grafana-dashboard.json) and exploits some of the metrics of the table above.
+
+### Health Endpoint
+On top of Prometheus, there is also an endpoint available at `/health`, which gives some very
+basic information about the state of the Chaos Monkey. It can be used in Kubernetes for the
+[liveness and readiness probe](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/).
 
 ## Development
 All contributions are welcome, of course. Feel free to open an issue or submit a

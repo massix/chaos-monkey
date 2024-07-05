@@ -10,6 +10,7 @@ import (
 
 	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
 	"github.com/massix/chaos-monkey/internal/configuration"
+	"github.com/massix/chaos-monkey/internal/endpoints"
 	"github.com/massix/chaos-monkey/internal/watcher"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
@@ -76,15 +77,18 @@ func main() {
 
 	// Spawn the HTTP Server for Prometheus in background
 	srv := &http.Server{
-		Handler: promhttp.Handler(),
-		Addr:    "0.0.0.0:9000",
+		Addr: "0.0.0.0:9000",
 	}
+
+	// Register methods
+	http.Handle("GET /metrics", promhttp.Handler())
+	http.Handle("GET /health", endpoints.NewHealthEndpoint(nsWatcher.(*watcher.NamespaceWatcher)))
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		if err := srv.ListenAndServe(); err != nil {
-			log.Warnf("Could not spawn Prometheus handler: %s", err)
+			log.Warnf("Could not spawn http server: %s", err)
 		}
 	}()
 
@@ -92,7 +96,7 @@ func main() {
 	<-s
 
 	if err := srv.Shutdown(context.Background()); err != nil {
-		log.Warnf("Could not shutdown Prometheus handler: %s", err)
+		log.Warnf("Could not shutdown http server: %s", err)
 	}
 
 	log.Info("Shutting down...")

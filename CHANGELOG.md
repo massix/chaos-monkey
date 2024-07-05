@@ -1,4 +1,9 @@
-## v2.0.4 - 2024-07-04
+# Changelog
+
+
+- - -
+
+## v2.0.4 - 2024-07-02
 #### Bug Fixes
 - correctly force stop the DeploymentWatcher - (ec20449) - Massimo Gengarelli
 - change default timeouts - (219fcdf) - Massimo Gengarelli
@@ -24,20 +29,20 @@
 
 - - -
 
-## v2.0.3 - 2024-07-04
+## v2.0.3 - 2024-06-29
 #### Bug Fixes
 - not a real fix, simply extend the timeout to 24 hours - (ab03319) - Massimo Gengarelli
 
 - - -
 
-## v2.0.2 - 2024-07-04
+## v2.0.2 - 2024-06-29
 #### Bug Fixes
 - do not panic when receiving nil in events - (4b3d8ee) - Massimo Gengarelli
 - bump version - (d138eef) - Massimo Gengarelli
 
 - - -
 
-## v2.0.1 - 2024-07-04
+## v2.0.1 - 2024-06-28
 #### Documentation
 - **(architecture)** fix image of architecture - (618cbd6) - Massimo Gengarelli
 - fix documentation for clusterrole [ci skip] - (5a8131c) - Massimo Gengarelli
@@ -46,14 +51,14 @@
 
 - - -
 
-## v2.0.0 - 2024-07-04
+## v2.0.0 - 2024-06-28
 #### Features
 - honor the enabled flag - (94e3037) - Massimo Gengarelli
 - implement a new strategy for generating Chaos - (c5bee05) - Massimo Gengarelli
 
 - - -
 
-## v1.1.0 - 2024-07-04
+## v1.1.0 - 2024-06-27
 #### Bug Fixes
 - actually use the environment variable - (23156d9) - Massimo Gengarelli
 #### Build system
@@ -66,7 +71,7 @@
 
 - - -
 
-## v1.0.0 - 2024-07-04
+## v1.0.0 - 2024-06-27
 #### Build system
 - version binary and docker image - (76da64c) - Massimo Gengarelli
 - fix bitbucket pipeline - (4eddd7e) - Massimo Gengarelli

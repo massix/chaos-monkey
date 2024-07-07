@@ -239,6 +239,9 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 				}
 
 				n.metrics.restarts.Inc()
+
+				// Reset the number of active CMCs
+				n.metrics.cmcActive.Set(0)
 				break
 			}
 

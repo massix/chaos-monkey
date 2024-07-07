@@ -110,7 +110,7 @@
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": true,
-          "legendFormat": "{{namespace}}",
+          "legendFormat": "{{namespace}} ({{behavior}})",
           "range": false,
           "refId": "A",
           "useBackend": false

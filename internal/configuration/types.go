@@ -2,11 +2,18 @@ package configuration
 
 import (
 	"fmt"
+	"time"
 )
 
 type (
 	Behavior    string
 	LogrusLevel string
+
+	Timeouts struct {
+		Namespace time.Duration
+		Crd       time.Duration
+		Pod       time.Duration
+	}
 )
 
 // Label to look for in the NS to either allow or deny the namespace

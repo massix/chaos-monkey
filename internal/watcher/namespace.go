@@ -149,6 +149,9 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		recorder = broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "chaos-monkey"})
 	}
 
+	// FIXME: this is a horrible hack
+	to := configuration.TimeoutsFromEnvironment()
+
 	return &NamespaceWatcher{
 		NamespaceInterface:  clientset.CoreV1().Namespaces(),
 		EventRecorderLogger: recorder,
@@ -163,7 +166,7 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		Running:        false,
 		Client:         clientset,
 		CmcClient:      cmcClientset,
-		WatcherTimeout: 48 * time.Hour,
+		WatcherTimeout: to.Namespace,
 	}
 }
 

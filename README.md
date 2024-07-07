@@ -180,7 +180,7 @@ spec:
 ```
 
 ## Configuration
-There are two configurable parts of the ChaosMonkey (on top of what the [CRD](./crds/chaosmonkey-configuration.yaml)
+There are some configurable parts of the ChaosMonkey (on top of what the [CRD](./crds/chaosmonkey-configuration.yaml)
 already permits of course).
 
 **Minimum Log Level**: this is configurable using the environment variable `CHAOSMONKEY_LOGLEVEL`,
@@ -209,6 +209,22 @@ the string `true` will cause the Watcher to ignore that namespace.
 
 Injecting an incorrect value or no value at all will have ChaosMonkey use its
 default behavior: `AllowAll`.
+
+**Watchers Timeout**: not to be confused with the timeout provided by the [CRD](#deployment-inside-a-kubernetes-cluster), this is merely a
+technical value, it is the timeout for the `watch` method in Kubernetes. The default value
+is of 48 hours, which should be good for whatever kind of cluster you are running, but
+if you want to increase or decrease it you have three different environment
+variables you can use:
+- `CHAOSMONKEY_NS_TIMEOUT` to configure the timeout for the [Namespace Watcher](#namespace-watcher)
+- `CHAOSMONKEY_CRD_TIMEOUT` to configure the timeout for the [CRD Watcher](#crd-watcher)
+- `CHAOSMONKEY_POD_TIMEOUT` to configure the timeout for the [Pod Watcher](#pod-watcher).
+
+The three environment values expect a string following the specification of the [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration)
+method of Golang. Failure in parsing a value will have Chaos Monkey use the
+default timeout of 48 hours.
+
+It is recommended not to touch these values unless you know what you are doing (spoiler: I do not
+know what I am doing most of the times).
 
 ## Observability
 The Chaos Monkey has two observability endpoints available, both exposed by the HTTP server

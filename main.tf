@@ -220,8 +220,6 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
     annotations = {
       "apps.massix.github.io/image-id"       = docker_image.chaos-monkey-image.id
       "apps.massix.github.io/dockerfile-sha" = sha256(file("${path.module}/Dockerfile"))
-      "prometheus.io/scrape"                 = "true"
-      "prometheus.io/path"                   = "/metrics"
     }
   }
 
@@ -236,6 +234,11 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
       metadata {
         labels = {
           "apps.massix.github.io/name" = "chaos-monkey"
+        }
+        annotations = {
+          "prometheus.io/scrape" = "true"
+          "prometheus.io/path"   = "/metrics"
+          "prometheus.io/port"   = "http"
         }
       }
       spec {

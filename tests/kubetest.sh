@@ -4,209 +4,12 @@ KUBECTL=$(which kubectl 2>/dev/null)
 CURL=$(which curl 2>/dev/null)
 JQ=$(which jq 2>/dev/null)
 CLUSTER_NAME="${TERRAFORM_CLUSTER_NAME:-chaosmonkey-cluster}"
+DIR_PATH="$(dirname "${BASH_SOURCE[0]}")"
+
+# shellcheck source=./tests/library.sh
+source "${DIR_PATH}/library.sh"
 
 set -eo pipefail
-
-log() {
-  local level="${1}"
-  local coloredLevel=""
-  shift
-  case "${level}" in
-  info)
-    coloredLevel="\033[0;32m${level}\033[0m"
-    ;;
-  warn)
-    coloredLevel="\033[0;33m${level}\033[0m"
-    ;;
-  error)
-    coloredLevel="\033[0;31m${level}\033[0m"
-    ;;
-  debug)
-    coloredLevel="\033[0;34m${level}\033[0m"
-    ;;
-  *)
-    coloredLevel="\033[0;32munknown\033[0m"
-    ;;
-
-  esac
-
-  echo -e "[$(date +"%Y-%m-%d %H:%M:%S")] [${coloredLevel}] - $*"
-}
-
-info() {
-  log info "$*"
-}
-
-warn() {
-  log warn "$*"
-}
-
-debug() {
-  if [[ "${TEST_DEBUG:-false}" == "true" ]]; then
-    log debug "$*"
-  fi
-}
-
-err() {
-  log error "$*"
-
-  if [[ "${PF_PID}" != "" ]]; then
-    info "Force stopping port-forward after failure"
-    kill -15 "${PF_PID}"
-  fi
-
-  exit 1
-}
-
-# Helper function to detect whether a given program is installed or not
-checkProgram() {
-  local programName="$1"
-  shift
-  local errorMessage="$*"
-
-  debug "Checking ${programName}"
-
-  if ! type "${programName}" 2>/dev/null >/dev/null; then
-    err "${errorMessage}"
-  fi
-}
-
-# Helper function to check that the replicas of a given deployment change over time
-checkReplicas() {
-  local deploymentName="$1"
-  local currentScale
-  local newScale
-  local completedLoops
-
-  currentScale=$(${KUBECTL} get deployment "${deploymentName}" --namespace=target -o jsonpath='{.spec.replicas}')
-  newScale=$(${KUBECTL} get deployment "${deploymentName}" --namespace=target -o jsonpath='{.spec.replicas}')
-  debug "Checking replicas for ${deploymentName}"
-
-  completedLoops=0
-  while [ "${currentScale}" == "${newScale}" ]; do
-    info "Current replicas: ${currentScale}, waiting for the replicas to change ($((10 - completedLoops)) retries left)"
-
-    newScale=$(${KUBECTL} get deployment "${deploymentName}" --namespace=target -o jsonpath='{.spec.replicas}')
-    debug "Current replicas: ${currentScale}, new replicas: ${newScale}"
-
-    completedLoops=$((completedLoops + 1))
-    if [ ${completedLoops} -gt 10 ]; then
-      err "Replicas did not change after ${completedLoops} retries, please check the chaosmonkey pod logs"
-    else
-      sleep 10
-    fi
-  done
-}
-
-# Helper function to verify that the scale of a given deployment *does not* change over time
-checkReplicasDoesNotChange() {
-  local deploymentName="$1"
-  local currentScale
-  local newScale
-  local completedLoops
-
-  debug "Checking that .spec.replicas for ${deploymentName} does not change over time"
-
-  currentScale=$(${KUBECTL} get deployment "${deploymentName}" --namespace=target -o jsonpath='{.spec.replicas}')
-  newScale=$(${KUBECTL} get deployment "${deploymentName}" --namespace=target -o jsonpath='{.spec.replicas}')
-
-  completedLoops=0
-  while [ ${completedLoops} -lt 5 ]; do
-    debug "Loop #${completedLoops}"
-
-    if [ "${currentScale}" != "${newScale}" ]; then
-      err "Number of replicas changed (${currentScale} -> ${newScale})"
-    else
-      info "Still ok, number of replicas: ${currentScale} ($((5 - completedLoops)) loops left)"
-      sleep 5
-      newScale=$(${KUBECTL} get deployment "${deploymentName}" --namespace=target -o jsonpath='{.spec.replicas}')
-      completedLoops=$((completedLoops + 1))
-    fi
-  done
-}
-
-# Helper function to check that the pods of a given deployment are recreated over time
-checkPods() {
-  local selector="$1"
-  local currentPods
-  local newPods
-  local completedLoops
-
-  currentPods=$(${KUBECTL} get -n target pods --selector "${selector}" -o jsonpath='{.items[*].metadata.name}')
-  newPods=$(${KUBECTL} get -n target pods --selector "${selector}" -o jsonpath='{.items[*].metadata.name}')
-
-  debug "Checking pods for ${selector}"
-
-  completedLoops=0
-  while [ "${currentPods}" == "${newPods}" ]; do
-    info "Current pods: ${currentPods}, waiting for the pods to change ($((10 - completedLoops)) retries left)"
-
-    newPods=$(${KUBECTL} get -n target pods --selector "${selector}" -o jsonpath='{.items[*].metadata.name}')
-    debug "Current pods: ${currentPods}, new pods: ${newPods}"
-
-    completedLoops=$((completedLoops + 1))
-    if [ ${completedLoops} -gt 10 ]; then
-      err "Pods did not change after ${completedLoops} retries, please check the chaosmonkey pod logs"
-    else
-      sleep 10
-    fi
-  done
-}
-
-# Helper function to check that the number of pods stay equal over time
-checkNumberPods() {
-  local selector="$1"
-  local targetValue=$2
-  local countPods
-  local completedLoops
-
-  debug "Checking number of pods for ${selector} (should remain ${targetValue})"
-
-  countPods=$(${KUBECTL} get -n target pods --selector "${selector}" --no-headers | wc -l)
-
-  completedLoops=0
-  info "Checking number of pods"
-  while [[ ${countPods} != "${targetValue}" ]]; do
-    debug "Checking number of pods (${countPods}), waiting for ${targetValue} ($((10 - completedLoops)) retries left)"
-    countPods=$(${KUBECTL} get -n target pods --selector "${selector}" --no-headers | wc -l)
-    sleep 1
-
-    completedLoops=$((completedLoops + 1))
-    if [ ${completedLoops} -gt 10 ]; then
-      err "There should always be 2 pods active"
-    fi
-  done
-}
-
-checkMetric() {
-  local hostname="$1"
-  local metricName="$2"
-
-  info "Checking presence of metric $metricName @ $hostname"
-  if ! ${CURL} -s "${hostname}/metrics" | grep "${metricName}" 2>/dev/null >/dev/null; then
-    err "Metric ${metricName} not found on ${hostname}"
-  fi
-}
-
-checkAllPodsNoChanges() {
-  local counter=0
-  local cpList
-  local newCpList
-
-  cpList=$(${KUBECTL} get pods -n target -o jsonpath='{.items[*].metadata.name}')
-  newCpList=$(${KUBECTL} get pods -n target -o jsonpath='{.items[*].metadata.name}')
-
-  while [[ $counter -lt 5 ]]; do
-    if [[ "${cpList}" == "${newCpList}" ]]; then
-      info "Pods did not change ($((5 - counter)) loops left)"
-      sleep 10
-    else
-      err "Pods have changed"
-    fi
-
-    counter=$((counter + 1))
-  done
-}
 
 checkProgram kubectl "Please install kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl/"
 checkProgram curl "Please install curl: https://curl.se/download.html"
@@ -215,7 +18,7 @@ checkProgram jq "Please install jq: https://stedolan.github.io/jq/download/"
 # Check if the cluster has been started
 debug "Check that ${CLUSTER_NAME} exists"
 if ! ${KUBECTL} config get-contexts | grep "kind-${CLUSTER_NAME}" &>/dev/null; then
-  err "Please start the cluster using 'make cluster-test' before running this script"
+  panic "Please start the cluster using 'make cluster-test' before running this script"
 else
   debug "Force switching context to ${CLUSTER_NAME}"
   ${KUBECTL} config use-context "kind-${CLUSTER_NAME}" >/dev/null
@@ -229,7 +32,7 @@ info "Checking namespaces"
 for ns in target chaosmonkey; do
   debug "Checking if namespace ${ns} target exists"
   if ! ${KUBECTL} get ns | grep ${ns} &>/dev/null; then
-    err "Namespace ${ns} does not exist"
+    panic "Namespace ${ns} does not exist"
   fi
 done
 
@@ -237,7 +40,7 @@ info "Checking pods"
 for ns in target chaosmonkey; do
   debug "Checking if pods in namespace ${ns} are ready"
   if ! ${KUBECTL} get pods --namespace=${ns} | grep Running &>/dev/null; then
-    err "Pods in namespace ${ns} are not ready"
+    panic "Pods in namespace ${ns} are not ready"
   fi
 done
 
@@ -245,27 +48,27 @@ info "Checking deployments"
 deploymentCount=$(${KUBECTL} get deployments --namespace=chaosmonkey --no-headers | wc -l)
 debug "chaosmonkey namespace contains ${deploymentCount} deployment(s)"
 if [[ ${deploymentCount} != 1 ]]; then
-  err "chaosmonkey namespace should contain 1 deployment"
+  panic "chaosmonkey namespace should contain 1 deployment"
 fi
 
 info "Checking service"
 serviceCount=$(${KUBECTL} get services --namespace=chaosmonkey --no-headers | wc -l)
 debug "chaosmonkey namespace contains ${serviceCount} services"
 if [[ ${serviceCount} != 1 ]]; then
-  err "chaosmonkey namespace should contain 1 service"
+  panic "chaosmonkey namespace should contain 1 service"
 fi
 
 deploymentCount=$(${KUBECTL} get deployments --namespace=target --no-headers | wc -l)
 debug "target namespace contains ${deploymentCount} deployment(s)"
 if [[ ${deploymentCount} != 2 ]]; then
-  err "target namespace should contain 2 deployments"
+  panic "target namespace should contain 2 deployments"
 fi
 
 info "Checking ChaosMonkeyConfigurations"
 cmcCount=$(${KUBECTL} get cmc --namespace=target --no-headers | wc -l)
 debug "target namespace contains ${cmcCount} cmc(s)"
 if [[ ${cmcCount} != 2 ]]; then
-  err "target namespace should contain 2 cmc"
+  panic "target namespace should contain 2 cmc"
 fi
 
 disruptScale="nginx-disrupt-scale"
@@ -302,13 +105,13 @@ if ! ${KUBECTL} -n target get events | grep ChaosMonkey &>/dev/null; then
 fi
 
 info "Checking CMC with podMode=false (${disruptScale})"
-checkReplicas ${disruptScale}
+replicasShouldChange -d ${disruptScale} -n target -r 5 -s 10
 
 info "Checking CMC with podMode=true (${disruptPods})"
-checkPods "app=${disruptPods}"
+podsShouldChange -l "app=${disruptPods}" -n target -r 5
 
 info "Checking number of pods"
-checkNumberPods "app=${disruptPods}" 2
+numberOfPodsShouldNotChange -l "app=${disruptPods}" -n target -t 2 -L 5
 
 info "Stopping ${disruptScale} CMC"
 if ! ${KUBECTL} patch -n target cmc chaosmonkey-${disruptScale} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
@@ -316,19 +119,19 @@ if ! ${KUBECTL} patch -n target cmc chaosmonkey-${disruptScale} --type json --pa
   { "op": "replace", "path": "/spec/enabled", "value": false }
 ]
 JSONPATCH
-  err "Could not patch CMC for ${disruptScale}"
+  panic "Could not patch CMC for ${disruptScale}"
 fi
 
 info "Checking that CMC ${disruptScale} has been stopped correctly (number of scales should not change over time)"
-checkReplicasDoesNotChange ${disruptScale}
+replicasShouldNotChange -d ${disruptScale} -n target -l 5 -s 10
 
 info "Switching ${disruptPods} from podMode=true to podMode=false"
 if ! ${KUBECTL} patch -n target cmc chaosmonkey-${disruptPods} --type json --patch '[{"op":"replace", "path":"/spec/podMode", "value":false}]' >/dev/null; then
-  err "Could not patch CMC ${disruptPods}"
+  panic "Could not patch CMC ${disruptPods}"
 fi
 
 info "Checking that CMC ${disruptPods} is now correctly modifying the replicas of the deployment"
-checkReplicas ${disruptPods}
+replicasShouldChange -d ${disruptPods} -n target -r 5
 
 info "Switching ${disruptScale} from podMode=false to podMode=true and re-enabling it"
 if ! ${KUBECTL} patch -n target cmc chaosmonkey-${disruptScale} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
@@ -337,25 +140,25 @@ if ! ${KUBECTL} patch -n target cmc chaosmonkey-${disruptScale} --type json --pa
   { "op": "replace", "path": "/spec/podMode", "value": true }
 ]
 JSONPATCH
-  err "Could not patch CMC ${disruptScale}"
+  panic "Could not patch CMC ${disruptScale}"
 fi
 
 info "Making sure there are at least two replicas of ${disruptScale}"
 if ! ${KUBECTL} scale -n target deployment ${disruptScale} --replicas=2 >/dev/null; then
-  err "Could not scale ${disruptScale}"
+  panic "Could not scale ${disruptScale}"
 fi
 
 info "Checking that pods change over time"
-checkPods "app=${disruptScale}"
+podsShouldChange -l "app=${disruptScale}" -n target -r 5
 
 info "Checking that we still have 2 pods"
-checkNumberPods "app=${disruptScale}" 2
+numberOfPodsShouldNotChange -l "app=${disruptScale}" -t 2 -n target -L 5
 
 info "Checking that chaosmonkey did not crash even once"
 restartCount=$(${KUBECTL} -n chaosmonkey get pods -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')
 debug "Restart count: ${restartCount}"
 if [ "${restartCount}" -ne 0 ]; then
-  err "Chaosmonkey crashed :("
+  panic "Chaosmonkey crashed :("
 fi
 
 info "Checking exposed metrics by ChaosMonkey"
@@ -390,7 +193,7 @@ ALLMETRICS=(
   "chaos_monkey_deploymentwatcher_last_scale"
 )
 for m in "${ALLMETRICS[@]}"; do
-  checkMetric $HOSTNAME "$m"
+  metricShouldExist -m "$m" -h "localhost" -p "9090"
 done
 
 info "Checking health endpoint"
@@ -398,7 +201,7 @@ EP_RESULT=$(${CURL} -s "http://localhost:9090/health")
 
 debug "Checking status"
 if [[ "$(echo "${EP_RESULT}" | ${JQ} -r '.status')" != "up" ]]; then
-  err "Status is not ok: ${EP_RESULT}"
+  panic "Status is not ok: ${EP_RESULT}"
 fi
 
 debug "Stopping port-forward"
@@ -412,14 +215,14 @@ if ! ${KUBECTL} patch namespace target --type json --patch-file=/dev/stdin <<-JS
 { "op": "add", "path": "/metadata/labels", "value": {"cm.massix.github.io/namespace": "false"} },
 ]
 JSONPATCH
-  err "Could not patch namespace"
+  panic "Could not patch namespace"
 fi
 
 # Wait for the ChaosMonkey to terminate
 sleep 5
 
 info "Checking that chaosmonkey is disabled for target namespace"
-checkAllPodsNoChanges
+podsOfNamespaceShouldNotChange -n target
 
 info "Patching deployment to inject DenyAll"
 if ! ${KUBECTL} patch -n chaosmonkey deploy chaos-monkey --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
@@ -427,20 +230,20 @@ if ! ${KUBECTL} patch -n chaosmonkey deploy chaos-monkey --type json --patch-fil
   { "op": "replace", "path": "/spec/template/spec/containers/0/env/1/value", "value": "DenyAll" },
 ]
 JSONPATCH
-  err "Could not patch Deployment"
+  panic "Could not patch Deployment"
 fi
 
 debug "Waiting for deployment to restart"
 if ! ${KUBECTL} rollout -n chaosmonkey restart deployment chaos-monkey >/dev/null 2>/dev/null; then
-  err "Could not restart deployment"
+  panic "Could not restart deployment"
 fi
 
 if ! ${KUBECTL} rollout -n chaosmonkey status deployment chaos-monkey >/dev/null 2>/dev/null; then
-  err "Could not wait for successful rollout"
+  panic "Could not wait for successful rollout"
 fi
 
 info "Checking that chaosmonkey is still disabled"
-checkAllPodsNoChanges
+podsOfNamespaceShouldNotChange -n target
 
 info "Patch the CMC configurations to their initial values"
 if ! ${KUBECTL} -n target patch cmc chaosmonkey-${disruptScale} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
@@ -451,7 +254,7 @@ if ! ${KUBECTL} -n target patch cmc chaosmonkey-${disruptScale} --type json --pa
   {"op": "replace", "path": "/spec/maxReplicas", "value": 4}
 ]
 JSONPATCH
-  err "Could not patch CMC ${disruptScale}"
+  panic "Could not patch CMC ${disruptScale}"
 fi
 
 if ! ${KUBECTL} -n target patch cmc chaosmonkey-${disruptPods} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
@@ -462,7 +265,7 @@ if ! ${KUBECTL} -n target patch cmc chaosmonkey-${disruptPods} --type json --pat
   {"op": "replace", "path": "/spec/maxReplicas", "value": 1}
 ]
 JSONPATCH
-  err "Could not patch CMC ${disruptPods}"
+  panic "Could not patch CMC ${disruptPods}"
 fi
 
 info "Patch the namespace to enable it"
@@ -471,13 +274,13 @@ if ! ${KUBECTL} patch namespace target --type json --patch-file=/dev/stdin <<-JS
 { "op": "replace", "path": "/metadata/labels/cm.massix.github.io~1namespace", "value": "true" },
 ]
 JSONPATCH
-  err "Could not patch namespace"
+  panic "Could not patch namespace"
 fi
 
 info "Check that the pods are changing again"
-checkPods "app=${disruptPods}"
+podsShouldChange -l "app=${disruptPods}" -n target -r 5
 
 info "Check that the replicas are changing again"
-checkReplicas "${disruptScale}"
+replicasShouldChange -d "${disruptScale}" -n target -r 5
 
 info "All tests passed!"

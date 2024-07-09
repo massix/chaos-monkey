@@ -397,7 +397,7 @@ info "Checking health endpoint"
 EP_RESULT=$(${CURL} -s "http://localhost:9090/health")
 
 debug "Checking status"
-if [[ "$(echo "${EP_RESULT}" | jq -r '.status')" != "up" ]]; then
+if [[ "$(echo "${EP_RESULT}" | ${JQ} -r '.status')" != "up" ]]; then
   err "Status is not ok: ${EP_RESULT}"
 fi
 

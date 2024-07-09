@@ -106,8 +106,7 @@ func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorder
 
 	combinedSelector := strings.Join(labelSelector, ",")
 
-	// FIXME: this is a horrible hack
-	to := configuration.TimeoutsFromEnvironment()
+	conf := configuration.FromEnvironment()
 
 	return &PodWatcher{
 		PodInterface:        clientset.CoreV1().Pods(namespace),
@@ -119,7 +118,7 @@ func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorder
 		LabelSelector: combinedSelector,
 		PodList:       []*apicorev1.Pod{},
 		Timeout:       30 * time.Second,
-		WatchTimeout:  to.Pod,
+		WatchTimeout:  conf.Timeouts.Pod,
 		ForceStopChan: make(chan interface{}),
 		metrics:       newPwMetrics(namespace, combinedSelector),
 		Enabled:       true,

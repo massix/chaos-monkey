@@ -19,7 +19,7 @@ func setup(crdWatchers, deployWatchers int) (*watcher.NamespaceWatcher, int) {
 	mainWatcher := &watcher.NamespaceWatcher{
 		CrdWatchers:   map[string]watcher.Watcher{},
 		RootNamespace: "root",
-		Behavior:      configuration.DenyAll,
+		Behavior:      configuration.BehaviorDenyAll,
 	}
 	created := 1
 
@@ -100,7 +100,7 @@ func TestHealthEndpoint_ServeHTTP(t *testing.T) {
 			t.Errorf("Wrong namespace %q", response.RootNamespace)
 		}
 
-		if response.Behavior != configuration.DenyAll {
+		if response.Behavior != configuration.BehaviorDenyAll {
 			t.Errorf("Wrong behavior %q", response.Behavior)
 		}
 	})

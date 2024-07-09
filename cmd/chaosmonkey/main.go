@@ -24,12 +24,8 @@ func main() {
 	log := logrus.WithFields(logrus.Fields{"component": "main"})
 
 	// Get the LogLevel from the environment variable
-	ll, err := configuration.LogrusLevelFromEnvironment()
-	if err != nil {
-		log.Warnf("No loglevel provided, using default: %s", logrus.GetLevel())
-	} else {
-		logrus.SetLevel(ll.LogrusLevel())
-	}
+	conf := configuration.FromEnvironment()
+	logrus.SetLevel(conf.LogrusLevel)
 
 	log.Infof("Starting Chaos-Monkey version: %s", Version)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -49,19 +45,10 @@ func main() {
 		panic(err)
 	}
 
-	log.Info("Configuring default behavior via environment variable")
-	behavior, err := configuration.BehaviorFromEnvironment()
-	if err != nil {
-		log.Warnf("Error while configuring default behavior: %s", err)
-
-		behavior = configuration.AllowAll
-		log.Warnf("Using default behavior: %s", behavior)
-	}
-
 	clientset := kubernetes.NewForConfigOrDie(cfg)
 	cmcClientset := versioned.NewForConfigOrDie(cfg)
 
-	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace, behavior)
+	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace, conf.Behavior)
 
 	// Hook signals
 	s := make(chan os.Signal, 1)

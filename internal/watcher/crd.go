@@ -165,8 +165,7 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 		recorder = broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "chaos-monkey"})
 	}
 
-	// FIXME: this is a horrible hack
-	to := configuration.TimeoutsFromEnvironment()
+	conf := configuration.FromEnvironment()
 
 	return &CrdWatcher{
 		ChaosMonkeyConfigurationInterface: cmcClientset.ChaosMonkeyConfigurationV1alpha1().ChaosMonkeyConfigurations(namespace),
@@ -180,7 +179,7 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 		ForceStopChan:      make(chan interface{}),
 		Namespace:          namespace,
 		CleanupTimeout:     15 * time.Minute,
-		WatcherTimeout:     to.Crd,
+		WatcherTimeout:     conf.Timeouts.Crd,
 		Running:            false,
 		metrics:            newCrdMetrics(namespace),
 	}

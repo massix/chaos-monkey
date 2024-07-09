@@ -149,8 +149,7 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		recorder = broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "chaos-monkey"})
 	}
 
-	// FIXME: this is a horrible hack
-	to := configuration.TimeoutsFromEnvironment()
+	conf := configuration.FromEnvironment()
 
 	return &NamespaceWatcher{
 		NamespaceInterface:  clientset.CoreV1().Namespaces(),
@@ -166,7 +165,7 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		Running:        false,
 		Client:         clientset,
 		CmcClient:      cmcClientset,
-		WatcherTimeout: to.Namespace,
+		WatcherTimeout: conf.Timeouts.Namespace,
 	}
 }
 
@@ -182,22 +181,22 @@ func (n *NamespaceWatcher) IsNamespaceAllowed(namespace *corev1.Namespace) bool 
 	label, ok := namespace.ObjectMeta.Labels[configuration.NamespaceLabel]
 
 	// We allow all and there is no label
-	if n.Behavior == configuration.AllowAll && !ok {
+	if n.Behavior == configuration.BehaviorAllowAll && !ok {
 		return true
 	}
 
 	// We deny all and there is no label
-	if n.Behavior == configuration.DenyAll && !ok {
+	if n.Behavior == configuration.BehaviorDenyAll && !ok {
 		return false
 	}
 
 	// We deny all by default, the label is a whitelist (only if its value is "true")
-	if n.Behavior == configuration.DenyAll {
+	if n.Behavior == configuration.BehaviorDenyAll {
 		return label == "true"
 	}
 
 	// We allow all by default, everything will let it through, except for "false"
-	if n.Behavior == configuration.AllowAll {
+	if n.Behavior == configuration.BehaviorAllowAll {
 		return label != "false"
 	}
 

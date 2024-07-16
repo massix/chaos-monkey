@@ -180,7 +180,7 @@ spec:
 ```
 
 ## Configuration
-There are two configurable parts of the ChaosMonkey (on top of what the [CRD](./crds/chaosmonkey-configuration.yaml)
+There are some configurable parts of the ChaosMonkey (on top of what the [CRD](./crds/chaosmonkey-configuration.yaml)
 already permits of course).
 
 **Minimum Log Level**: this is configurable using the environment variable `CHAOSMONKEY_LOGLEVEL`,
@@ -210,8 +210,29 @@ the string `true` will cause the Watcher to ignore that namespace.
 Injecting an incorrect value or no value at all will have ChaosMonkey use its
 default behavior: `AllowAll`.
 
+**Watchers Timeout**: not to be confused with the timeout provided by the [CRD](#deployment-inside-a-kubernetes-cluster), this is merely a
+technical value, it is the timeout for the `watch` method in Kubernetes. The default value
+is of 48 hours, which should be good for whatever kind of cluster you are running, but
+if you want to increase or decrease it you have three different environment
+variables you can use:
+- `CHAOSMONKEY_NS_TIMEOUT` to configure the timeout for the [Namespace Watcher](#namespace-watcher)
+- `CHAOSMONKEY_CRD_TIMEOUT` to configure the timeout for the [CRD Watcher](#crd-watcher)
+- `CHAOSMONKEY_POD_TIMEOUT` to configure the timeout for the [Pod Watcher](#pod-watcher).
+
+The three environment values expect a string following the specification of the [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration)
+method of Golang. Failure in parsing a value will have Chaos Monkey use the
+default timeout of 48 hours.
+
+It is recommended not to touch these values unless you know what you are doing (spoiler: I do not
+know what I am doing most of the times).
+
 ## Observability
-The Chaos Monkey exposes some metrics using the [Prometheus](https://prometheus.io/) library and format.
+The Chaos Monkey has two observability endpoints available, both exposed by the HTTP server
+running at port 9000 (not configurable).
+
+### Prometheus
+The Chaos Monkey exposes some metrics using the [Prometheus](https://prometheus.io/) library and format, the metrics are all
+available under the `/metrics` endpoint.
 
 This is an _evolving_ list of metrics currently exposed, for more details please take a look
 in the code under the corresponding service (all the services in the [watcher folder](./internal/watcher/) expose
@@ -248,6 +269,11 @@ no persistence enabled.  The Grafana will be loaded with three dashboards:
 - `node-exporter-full` to have some live statistics about your locally running K8S cluster;
 - `kube-state-metrics-v2` to have some statistics about the internals of K8S, useful to monitor how the ChaosMonkey is behaving;
 - `chaos-monkey`, for which the source is available [here](./assets/grafana-dashboard.json) and exploits some of the metrics of the table above.
+
+### Health Endpoint
+On top of Prometheus, there is also an endpoint available at `/health`, which gives some very
+basic information about the state of the Chaos Monkey. It can be used in Kubernetes for the
+[liveness and readiness probe](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/).
 
 ## Development
 All contributions are welcome, of course. Feel free to open an issue or submit a

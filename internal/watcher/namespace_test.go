@@ -65,7 +65,7 @@ func (f *FakeCrdWatcher) Close() error {
 var cmcClientset = fakecmc.NewSimpleClientset()
 
 func TestNamespaceWatcher_Create(t *testing.T) {
-	w := watcher.DefaultNamespaceFactory(kubernetes.NewSimpleClientset(), cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll)
+	w := watcher.DefaultNamespaceFactory(kubernetes.NewSimpleClientset(), cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.BehaviorAllowAll)
 	defer w.Close()
 
 	if w.IsRunning() {
@@ -76,7 +76,7 @@ func TestNamespaceWatcher_Create(t *testing.T) {
 func TestNamespaceWatcher_BasicBehaviour(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientSet := kubernetes.NewSimpleClientset()
-	w := watcher.DefaultNamespaceFactory(clientSet, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll).(*watcher.NamespaceWatcher)
+	w := watcher.DefaultNamespaceFactory(clientSet, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.BehaviorAllowAll).(*watcher.NamespaceWatcher)
 	w.CleanupTimeout = 1 * time.Second
 
 	// Inject my CRD Factory
@@ -161,7 +161,7 @@ func TestNamespaceWatcher_BasicBehaviour(t *testing.T) {
 func TestNamespaceWatcher_Error(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := kubernetes.NewSimpleClientset()
-	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll)
+	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.BehaviorAllowAll)
 
 	clientset.PrependWatchReactor("namespaces", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
 		fakeWatch := watch.NewFake()
@@ -201,7 +201,7 @@ func TestNamespaceWatcher_Error(t *testing.T) {
 func TestNamespaceWatcher_Cleanup(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := kubernetes.NewSimpleClientset()
-	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll).(*watcher.NamespaceWatcher)
+	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.BehaviorAllowAll).(*watcher.NamespaceWatcher)
 	w.CleanupTimeout = 1 * time.Second
 
 	// Add some fake watchers
@@ -254,7 +254,7 @@ func TestNamespaceWatcher_Cleanup(t *testing.T) {
 
 func TestNamespaceWatcher_RestartWatcher(t *testing.T) {
 	clientset := kubernetes.NewSimpleClientset()
-	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.AllowAll)
+	w := watcher.DefaultNamespaceFactory(clientset, cmcClientset, record.NewFakeRecorder(1024), "chaos-monkey", configuration.BehaviorAllowAll)
 	w.(*watcher.NamespaceWatcher).CleanupTimeout = 1 * time.Second
 	timeAsked := &atomic.Int32{}
 	timeAsked.Store(0)
@@ -324,7 +324,7 @@ func TestNamespaceWatcher_ModifyNamespace(t *testing.T) {
 		}
 	}
 
-	w := watcher.NewNamespaceWatcher(clientset, nil, record.NewFakeRecorder(1024), "chaosmonkey", configuration.AllowAll).(*watcher.NamespaceWatcher)
+	w := watcher.NewNamespaceWatcher(clientset, nil, record.NewFakeRecorder(1024), "chaosmonkey", configuration.BehaviorAllowAll).(*watcher.NamespaceWatcher)
 	w.WatcherTimeout = 24 * time.Hour
 	w.CleanupTimeout = 300 * time.Millisecond
 
@@ -388,7 +388,7 @@ func TestNamespaceWatcher_ModifyNamespace(t *testing.T) {
 
 	// Change the behavior to "DenyAll" and reset the watcher
 	w.Mutex.Lock()
-	w.Behavior = configuration.DenyAll
+	w.Behavior = configuration.BehaviorDenyAll
 	w.CrdWatchers = map[string]watcher.Watcher{}
 	w.Mutex.Unlock()
 

@@ -76,28 +76,28 @@ func (nw *nwMetrics) unregister() {
 
 var _ = (Watcher)((*NamespaceWatcher)(nil))
 
-func newNwMetrics(rootNamespace string) *nwMetrics {
+func newNwMetrics(rootNamespace, behavior string) *nwMetrics {
 	return &nwMetrics{
 		addedEvents: promauto.NewCounter(prometheus.CounterOpts{
 			Namespace:   "chaos_monkey",
 			Name:        "events",
 			Subsystem:   "nswatcher",
 			Help:        "Total number of events handled",
-			ConstLabels: map[string]string{"event_type": "add", "root_namespace": rootNamespace},
+			ConstLabels: map[string]string{"event_type": "add", "root_namespace": rootNamespace, "behavior": behavior},
 		}),
 		modifiedEvents: promauto.NewCounter(prometheus.CounterOpts{
 			Namespace:   "chaos_monkey",
 			Name:        "events",
 			Subsystem:   "nswatcher",
 			Help:        "Total number of events handled",
-			ConstLabels: map[string]string{"event_type": "modify", "root_namespace": rootNamespace},
+			ConstLabels: map[string]string{"event_type": "modify", "root_namespace": rootNamespace, "behavior": behavior},
 		}),
 		deletedEvents: promauto.NewCounter(prometheus.CounterOpts{
 			Namespace:   "chaos_monkey",
 			Name:        "events",
 			Subsystem:   "nswatcher",
 			Help:        "Total number of events handled",
-			ConstLabels: map[string]string{"event_type": "delete", "root_namespace": rootNamespace},
+			ConstLabels: map[string]string{"event_type": "delete", "root_namespace": rootNamespace, "behavior": behavior},
 		}),
 
 		restarts: promauto.NewCounter(prometheus.CounterOpts{
@@ -105,7 +105,7 @@ func newNwMetrics(rootNamespace string) *nwMetrics {
 			Name:        "restarts",
 			Subsystem:   "nswatcher",
 			Help:        "Total number of restarts handled",
-			ConstLabels: map[string]string{"root_namespace": rootNamespace},
+			ConstLabels: map[string]string{"root_namespace": rootNamespace, "behavior": behavior},
 		}),
 
 		cmcSpawned: promauto.NewCounter(prometheus.CounterOpts{
@@ -113,7 +113,7 @@ func newNwMetrics(rootNamespace string) *nwMetrics {
 			Name:        "cmc_spawned",
 			Subsystem:   "nswatcher",
 			Help:        "Total number of CMCs spawned",
-			ConstLabels: map[string]string{"root_namespace": rootNamespace},
+			ConstLabels: map[string]string{"root_namespace": rootNamespace, "behavior": behavior},
 		}),
 
 		cmcActive: promauto.NewGauge(prometheus.GaugeOpts{
@@ -121,7 +121,7 @@ func newNwMetrics(rootNamespace string) *nwMetrics {
 			Name:        "cmc_active",
 			Subsystem:   "nswatcher",
 			Help:        "Current active CMC Watchers",
-			ConstLabels: map[string]string{"root_namespace": rootNamespace},
+			ConstLabels: map[string]string{"root_namespace": rootNamespace, "behavior": behavior},
 		}),
 
 		eventDuration: promauto.NewHistogram(prometheus.HistogramOpts{
@@ -129,7 +129,7 @@ func newNwMetrics(rootNamespace string) *nwMetrics {
 			Name:        "event_duration",
 			Subsystem:   "nswatcher",
 			Help:        "How long it took to handle an event (calculated in microseconds)",
-			ConstLabels: map[string]string{"root_namespace": rootNamespace},
+			ConstLabels: map[string]string{"root_namespace": rootNamespace, "behavior": behavior},
 			Buckets:     []float64{0, 5, 10, 20, 50, 100, 500, 1000, 1500, 2000},
 		}),
 	}
@@ -149,6 +149,8 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		recorder = broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "chaos-monkey"})
 	}
 
+	conf := configuration.FromEnvironment()
+
 	return &NamespaceWatcher{
 		NamespaceInterface:  clientset.CoreV1().Namespaces(),
 		EventRecorderLogger: recorder,
@@ -156,14 +158,14 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		Logrus:         logrus.WithFields(logrus.Fields{"component": "NamespaceWatcher", "rootNamespace": rootNamespace}),
 		CrdWatchers:    map[string]Watcher{},
 		Mutex:          &sync.Mutex{},
-		metrics:        newNwMetrics(rootNamespace),
+		metrics:        newNwMetrics(rootNamespace, string(behavior)),
 		CleanupTimeout: 1 * time.Minute,
 		RootNamespace:  rootNamespace,
 		Behavior:       behavior,
 		Running:        false,
 		Client:         clientset,
 		CmcClient:      cmcClientset,
-		WatcherTimeout: 48 * time.Hour,
+		WatcherTimeout: conf.Timeouts.Namespace,
 	}
 }
 
@@ -179,22 +181,22 @@ func (n *NamespaceWatcher) IsNamespaceAllowed(namespace *corev1.Namespace) bool 
 	label, ok := namespace.ObjectMeta.Labels[configuration.NamespaceLabel]
 
 	// We allow all and there is no label
-	if n.Behavior == configuration.AllowAll && !ok {
+	if n.Behavior == configuration.BehaviorAllowAll && !ok {
 		return true
 	}
 
 	// We deny all and there is no label
-	if n.Behavior == configuration.DenyAll && !ok {
+	if n.Behavior == configuration.BehaviorDenyAll && !ok {
 		return false
 	}
 
 	// We deny all by default, the label is a whitelist (only if its value is "true")
-	if n.Behavior == configuration.DenyAll {
+	if n.Behavior == configuration.BehaviorDenyAll {
 		return label == "true"
 	}
 
 	// We allow all by default, everything will let it through, except for "false"
-	if n.Behavior == configuration.AllowAll {
+	if n.Behavior == configuration.BehaviorAllowAll {
 		return label != "false"
 	}
 
@@ -236,6 +238,9 @@ func (n *NamespaceWatcher) Start(ctx context.Context) error {
 				}
 
 				n.metrics.restarts.Inc()
+
+				// Reset the number of active CMCs
+				n.metrics.cmcActive.Set(0)
 				break
 			}
 

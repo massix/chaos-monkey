@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/massix/chaos-monkey/internal/configuration"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
@@ -105,6 +106,8 @@ func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorder
 
 	combinedSelector := strings.Join(labelSelector, ",")
 
+	conf := configuration.FromEnvironment()
+
 	return &PodWatcher{
 		PodInterface:        clientset.CoreV1().Pods(namespace),
 		EventRecorderLogger: recorder,
@@ -115,7 +118,7 @@ func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorder
 		LabelSelector: combinedSelector,
 		PodList:       []*apicorev1.Pod{},
 		Timeout:       30 * time.Second,
-		WatchTimeout:  15 * time.Minute,
+		WatchTimeout:  conf.Timeouts.Pod,
 		ForceStopChan: make(chan interface{}),
 		metrics:       newPwMetrics(namespace, combinedSelector),
 		Enabled:       true,

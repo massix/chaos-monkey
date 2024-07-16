@@ -16,11 +16,12 @@
         packages = with pkgs; [
           go
           terraform
-          kustomize
           kind
           kubernetes-code-generator
+          kubernetes-helm
           curl
           cocogitto
+          jq
         ];
       };
     };

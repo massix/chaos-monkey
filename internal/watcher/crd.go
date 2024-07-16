@@ -12,6 +12,7 @@ import (
 	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned/scheme"
 	cmv1alpha1 "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1alpha1"
 	"github.com/massix/chaos-monkey/internal/apis/v1alpha1"
+	"github.com/massix/chaos-monkey/internal/configuration"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
@@ -164,6 +165,8 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 		recorder = broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "chaos-monkey"})
 	}
 
+	conf := configuration.FromEnvironment()
+
 	return &CrdWatcher{
 		ChaosMonkeyConfigurationInterface: cmcClientset.ChaosMonkeyConfigurationV1alpha1().ChaosMonkeyConfigurations(namespace),
 		DeploymentInterface:               clientset.AppsV1().Deployments(namespace),
@@ -176,7 +179,7 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 		ForceStopChan:      make(chan interface{}),
 		Namespace:          namespace,
 		CleanupTimeout:     15 * time.Minute,
-		WatcherTimeout:     24 * time.Hour,
+		WatcherTimeout:     conf.Timeouts.Crd,
 		Running:            false,
 		metrics:            newCrdMetrics(namespace),
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
 	"github.com/massix/chaos-monkey/internal/configuration"
+	"github.com/massix/chaos-monkey/internal/endpoints"
 	"github.com/massix/chaos-monkey/internal/watcher"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
@@ -23,12 +24,8 @@ func main() {
 	log := logrus.WithFields(logrus.Fields{"component": "main"})
 
 	// Get the LogLevel from the environment variable
-	ll, err := configuration.LogrusLevelFromEnvironment()
-	if err != nil {
-		log.Warnf("No loglevel provided, using default: %s", logrus.GetLevel())
-	} else {
-		logrus.SetLevel(ll.LogrusLevel())
-	}
+	conf := configuration.FromEnvironment()
+	logrus.SetLevel(conf.LogrusLevel)
 
 	log.Infof("Starting Chaos-Monkey version: %s", Version)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -48,19 +45,10 @@ func main() {
 		panic(err)
 	}
 
-	log.Info("Configuring default behavior via environment variable")
-	behavior, err := configuration.BehaviorFromEnvironment()
-	if err != nil {
-		log.Warnf("Error while configuring default behavior: %s", err)
-
-		behavior = configuration.AllowAll
-		log.Warnf("Using default behavior: %s", behavior)
-	}
-
 	clientset := kubernetes.NewForConfigOrDie(cfg)
 	cmcClientset := versioned.NewForConfigOrDie(cfg)
 
-	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace, behavior)
+	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace, conf.Behavior)
 
 	// Hook signals
 	s := make(chan os.Signal, 1)
@@ -76,15 +64,18 @@ func main() {
 
 	// Spawn the HTTP Server for Prometheus in background
 	srv := &http.Server{
-		Handler: promhttp.Handler(),
-		Addr:    "0.0.0.0:9000",
+		Addr: "0.0.0.0:9000",
 	}
+
+	// Register methods
+	http.Handle("GET /metrics", promhttp.Handler())
+	http.Handle("GET /health", endpoints.NewHealthEndpoint(nsWatcher.(*watcher.NamespaceWatcher)))
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		if err := srv.ListenAndServe(); err != nil {
-			log.Warnf("Could not spawn Prometheus handler: %s", err)
+			log.Warnf("Could not spawn http server: %s", err)
 		}
 	}()
 
@@ -92,7 +83,7 @@ func main() {
 	<-s
 
 	if err := srv.Shutdown(context.Background()); err != nil {
-		log.Warnf("Could not shutdown Prometheus handler: %s", err)
+		log.Warnf("Could not shutdown http server: %s", err)
 	}
 
 	log.Info("Shutting down...")

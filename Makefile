@@ -3,7 +3,7 @@ TERRAFORM := $(shell which terraform)
 DOCKER := $(shell which docker)
 APPNAME ?= chaos-monkey
 IMAGE ?= chaos-monkey
-TAG ?= 2.1.0
+TAG ?= 2.2.0
 
 all: bin/$(APPNAME)
 .PHONY: clean generate bin/$(APPNAME) image-version cluster-test
@@ -29,7 +29,7 @@ image-tag:
 
 test:
 	$(GO) vet ./...
-	CGO_ENABLED=1 $(GO) test -v -race ./...
+	CGO_ENABLED=1 $(GO) test -bench=. -v -race ./...
 
 clean:
 	$(TERRAFORM) destroy --auto-approve || true

@@ -235,6 +235,11 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
         labels = {
           "apps.massix.github.io/name" = "chaos-monkey"
         }
+        annotations = {
+          "prometheus.io/scrape" = "true"
+          "prometheus.io/path"   = "/metrics"
+          "prometheus.io/port"   = "http"
+        }
       }
       spec {
         service_account_name = kubernetes_service_account.chaos-monkey-svcaccount.metadata.0.name
@@ -242,6 +247,18 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
           name              = "chaos-monkey"
           image             = docker_image.chaos-monkey-image.name
           image_pull_policy = "Never"
+          liveness_probe {
+            http_get {
+              port = "http"
+              path = "/health"
+            }
+          }
+          readiness_probe {
+            http_get {
+              port = "http"
+              path = "/health"
+            }
+          }
           env {
             name  = "CHAOSMONKEY_LOGLEVEL"
             value = "debug"
@@ -252,7 +269,7 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
           }
           port {
             container_port = 9000
-            name           = "metrics"
+            name           = "http"
             protocol       = "TCP"
           }
         }
@@ -275,23 +292,21 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
   }
 }
 
-resource "kubernetes_service" "chaos-monkey-service" {
+resource "kubernetes_service" "chaos-monkey" {
   metadata {
     name      = "chaos-monkey"
     namespace = kubernetes_namespace.chaosmonkey.id
-    annotations = {
-      "prometheus.io/scrape" = "true"
-    }
   }
+
   spec {
     type = "ClusterIP"
     selector = {
       "apps.massix.github.io/name" = "chaos-monkey"
     }
     port {
-      target_port = "metrics"
+      name        = "http"
       port        = 80
-      name        = "metrics"
+      target_port = "http"
     }
   }
 }

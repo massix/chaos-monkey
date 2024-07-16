@@ -2,6 +2,26 @@
 
 
 - - -
+## v2.2.0 - 2024-07-16
+#### Bug Fixes
+- **(metrics)** reset the active CMC metric after a reset of the watcher - (2e1f9b0) - Massimo Gengarelli
+#### Documentation
+- **(hld)** update - (7ed51b8) - Massimo Gengarelli
+#### Features
+- **(health)** implement health endpoint - (c4280ca) - Massimo Gengarelli
+- **(observability)** add behavior label to nswatcher - (c8211bc) - Massimo Gengarelli
+- **(watchers)** make the timeouts configurable - (4150c13) - Massimo Gengarelli
+#### Miscellaneous Chores
+- bump version - (ee180d8) - Massimo Gengarelli
+#### Refactoring
+- **(configuration)** better way to parse the configuration from environment - (121c647) - Massimo Gengarelli
+- **(e2e)** separate checks from tests in e2e tests - (b48fd75) - Massimo Gengarelli
+#### Tests
+- use JQ from PATH - (5088ec6) - Massimo Gengarelli
+- use annotations at pod level instead of service - (5e42701) - Massimo Gengarelli
+
+- - -
+
 ## v2.1.0 - 2024-07-05
 #### Build system
 - fix failing clean job [ci skip] - (54e9fad) - Massimo Gengarelli

@@ -135,7 +135,7 @@ func newNwMetrics(rootNamespace, behavior string) *nwMetrics {
 	}
 }
 
-func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, rootNamespace string, behavior configuration.Behavior) Watcher {
+func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, rootNamespace string, behavior configuration.Behavior) *NamespaceWatcher {
 	logrus.Infof("Creating new namespace watcher for namespace %s", rootNamespace)
 
 	if clientset == nil {

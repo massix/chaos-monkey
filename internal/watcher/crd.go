@@ -156,7 +156,7 @@ func newCrdMetrics(namespace string) *crdMetrics {
 	}
 }
 
-func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interface, recorder record.EventRecorderLogger, namespace string) Watcher {
+func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interface, recorder record.EventRecorderLogger, namespace string) *CrdWatcher {
 	// Build my own recorder here
 	if recorder == nil {
 		logrus.Debug("No recorder provided, using default")

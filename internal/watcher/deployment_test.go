@@ -87,8 +87,6 @@ func TestDeploymentWatcher_BasicBehaviour(t *testing.T) {
 
 	<-done
 
-	t.Logf("Number of requests: %d", numberOfRequests)
-
 	// We should have received 10 requests
 	if numberOfRequests.Load() != 10 {
 		t.Errorf("Wrong number of requests: %d", numberOfRequests)

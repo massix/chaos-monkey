@@ -37,8 +37,19 @@ type (
 
 // Default factories
 var (
-	DefaultNamespaceFactory  NamespaceFactory  = NewNamespaceWatcher
-	DefaultCrdFactory        CrdFactory        = NewCrdWatcher
-	DefaultDeploymentFactory DeploymentFactory = NewDeploymentWatcher
-	DefaultPodFactory        PodFactory        = NewPodWatcher
+	DefaultNamespaceFactory NamespaceFactory = func(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, rootNamespace string, behavior configuration.Behavior) Watcher {
+		return NewNamespaceWatcher(clientset, cmcClientset, recorder, rootNamespace, behavior)
+	}
+
+	DefaultCrdFactory CrdFactory = func(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, namespace string) Watcher {
+		return NewCrdWatcher(clientset, cmcClientset, recorder, namespace)
+	}
+
+	DefaultDeploymentFactory DeploymentFactory = func(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) ConfigurableWatcher {
+		return NewDeploymentWatcher(clientset, recorder, deployment)
+	}
+
+	DefaultPodFactory PodFactory = func(clientset kubernetes.Interface, recorder record.EventRecorderLogger, namespace string, labelSelector ...string) ConfigurableWatcher {
+		return NewPodWatcher(clientset, recorder, namespace, labelSelector...)
+	}
 )

@@ -7,6 +7,7 @@ package externalversions
 import (
 	"fmt"
 
+	v1 "github.com/massix/chaos-monkey/internal/apis/v1"
 	v1alpha1 "github.com/massix/chaos-monkey/internal/apis/v1alpha1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
@@ -38,7 +39,11 @@ func (f *genericInformer) Lister() cache.GenericLister {
 // TODO extend this to unknown resources with a client pool
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
-	// Group=cm.massix.github.io, Version=v1alpha1
+	// Group=cm.massix.github.io, Version=v1
+	case v1.SchemeGroupVersion.WithResource("chaosmonkeyconfigurations"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.ChaosMonkeyConfiguration().V1().ChaosMonkeyConfigurations().Informer()}, nil
+
+		// Group=cm.massix.github.io, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithResource("chaosmonkeyconfigurations"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.ChaosMonkeyConfiguration().V1alpha1().ChaosMonkeyConfigurations().Informer()}, nil
 

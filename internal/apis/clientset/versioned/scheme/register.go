@@ -5,6 +5,7 @@
 package scheme
 
 import (
+	chaosmonkeyconfigurationv1 "github.com/massix/chaos-monkey/internal/apis/v1"
 	chaosmonkeyconfigurationv1alpha1 "github.com/massix/chaos-monkey/internal/apis/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
@@ -17,6 +18,7 @@ var Scheme = runtime.NewScheme()
 var Codecs = serializer.NewCodecFactory(Scheme)
 var ParameterCodec = runtime.NewParameterCodec(Scheme)
 var localSchemeBuilder = runtime.SchemeBuilder{
+	chaosmonkeyconfigurationv1.AddToScheme,
 	chaosmonkeyconfigurationv1alpha1.AddToScheme,
 }
 

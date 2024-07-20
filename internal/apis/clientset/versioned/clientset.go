@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
+	chaosmonkeyconfigurationv1 "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1"
 	chaosmonkeyconfigurationv1alpha1 "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1alpha1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
@@ -16,13 +17,20 @@ import (
 
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
+	ChaosMonkeyConfigurationV1() chaosmonkeyconfigurationv1.ChaosMonkeyConfigurationV1Interface
 	ChaosMonkeyConfigurationV1alpha1() chaosmonkeyconfigurationv1alpha1.ChaosMonkeyConfigurationV1alpha1Interface
 }
 
 // Clientset contains the clients for groups.
 type Clientset struct {
 	*discovery.DiscoveryClient
+	chaosMonkeyConfigurationV1       *chaosmonkeyconfigurationv1.ChaosMonkeyConfigurationV1Client
 	chaosMonkeyConfigurationV1alpha1 *chaosmonkeyconfigurationv1alpha1.ChaosMonkeyConfigurationV1alpha1Client
+}
+
+// ChaosMonkeyConfigurationV1 retrieves the ChaosMonkeyConfigurationV1Client
+func (c *Clientset) ChaosMonkeyConfigurationV1() chaosmonkeyconfigurationv1.ChaosMonkeyConfigurationV1Interface {
+	return c.chaosMonkeyConfigurationV1
 }
 
 // ChaosMonkeyConfigurationV1alpha1 retrieves the ChaosMonkeyConfigurationV1alpha1Client
@@ -74,6 +82,10 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 
 	var cs Clientset
 	var err error
+	cs.chaosMonkeyConfigurationV1, err = chaosmonkeyconfigurationv1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	if err != nil {
+		return nil, err
+	}
 	cs.chaosMonkeyConfigurationV1alpha1, err = chaosmonkeyconfigurationv1alpha1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
@@ -99,6 +111,7 @@ func NewForConfigOrDie(c *rest.Config) *Clientset {
 // New creates a new Clientset for the given RESTClient.
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
+	cs.chaosMonkeyConfigurationV1 = chaosmonkeyconfigurationv1.New(c)
 	cs.chaosMonkeyConfigurationV1alpha1 = chaosmonkeyconfigurationv1alpha1.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)

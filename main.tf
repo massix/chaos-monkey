@@ -59,6 +59,7 @@ resource "docker_image" "chaos-monkey-image" {
   triggers = {
     dockerFile = sha256(file("${path.module}/Dockerfile"))
     binFile    = sha256(filebase64("${path.module}/bin/chaos-monkey"))
+    certFile   = sha256(file("${path.module}/certs/chaos-monkey.chaosmonkey.svc.crt"))
   }
 }
 
@@ -89,7 +90,7 @@ resource "kubernetes_namespace" "target-namespace" {
 
 resource "kubectl_manifest" "deployment-mode-crd" {
   yaml_body = <<YAML
-    apiVersion: cm.massix.github.io/v1alpha1
+    apiVersion: cm.massix.github.io/v1
     kind: ChaosMonkeyConfiguration
     metadata:
       name: chaosmonkey-nginx-disrupt-scale
@@ -99,18 +100,22 @@ resource "kubectl_manifest" "deployment-mode-crd" {
       minReplicas: 0
       maxReplicas: 9
       timeout: 10s
-      deploymentName: ${kubernetes_deployment.nginx-disrupt-scale.metadata.0.name}
-      podMode: false
+      deployment:
+        name: ${kubernetes_deployment.nginx-disrupt-scale.metadata.0.name}
+      scalingMode: randomScale
   YAML
 
   validate_schema = true
 
-  depends_on = [kubernetes_deployment.nginx-disrupt-scale]
+  depends_on = [
+    kubernetes_deployment.nginx-disrupt-scale,
+    kubernetes_deployment.chaos-monkey-deployment
+  ]
 }
 
 resource "kubectl_manifest" "pods-mode-crd" {
   yaml_body = <<YAML
-    apiVersion: cm.massix.github.io/v1alpha1
+    apiVersion: cm.massix.github.io/v1
     kind: ChaosMonkeyConfiguration
     metadata:
       name: chaosmonkey-nginx-disrupt-pods
@@ -120,13 +125,17 @@ resource "kubectl_manifest" "pods-mode-crd" {
       minReplicas: 0
       maxReplicas: 9
       timeout: 10s
-      deploymentName: ${kubernetes_deployment.nginx-disrupt-pods.metadata.0.name}
-      podMode: true
+      deployment:
+        name: ${kubernetes_deployment.nginx-disrupt-pods.metadata.0.name}
+      scalingMode: killPod
   YAML
 
   validate_schema = true
 
-  depends_on = [kubernetes_deployment.nginx-disrupt-pods]
+  depends_on = [
+    kubernetes_deployment.nginx-disrupt-pods,
+    kubernetes_deployment.chaos-monkey-deployment
+  ]
 }
 
 resource "kubectl_manifest" "crd" {
@@ -272,6 +281,11 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
             name           = "http"
             protocol       = "TCP"
           }
+          port {
+            container_port = 9443
+            name           = "https"
+            protocol       = "TCP"
+          }
         }
       }
     }
@@ -307,6 +321,11 @@ resource "kubernetes_service" "chaos-monkey" {
       name        = "http"
       port        = 80
       target_port = "http"
+    }
+    port {
+      name        = "https"
+      port        = 443
+      target_port = "https"
     }
   }
 }

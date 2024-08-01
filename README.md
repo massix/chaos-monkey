@@ -79,7 +79,7 @@ same `spec.selector` value of the targeted Deployment.
 As of now, three values are supported by the `scalingMode` field:
 * `randomScale`, which will create a [DeploymentWatcher](#deployment-watcher), it will randomly modify the scales of the given deployment;
 * `killPod`, which will create a [PodWatcher](#pod-watcher), it will randomly kill a pod;
-* `antiPressure`, do not use it because it's not implemented yet.
+* `antiPressure`, which will create a [AntiPressureWatcher](#antipressure-watcher).
 
 ### Deployment Watcher
 This is where the fun begins, the Deployment Watcher is responsible of creating the
@@ -102,6 +102,17 @@ of the CRD, it will randomly kill a pod matching the field.
 
 The Pod Watcher **ignores** the `maxReplicas` and `minReplicas` fields of the CRD,
 thus generating real chaos inside the cluster.
+
+### AntiPressure Watcher
+This is another point where the fun begins. The AntiPressure Watcher is responsible
+of creating Chaos inside the cluster by detecting which pod of a given container
+is using the most CPU and simply kill it. It works the opposite of a classic
+[Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/), in the code is often referred to as `antiHPA` for this reason.
+
+**WARNING**: for the AntiPressure Watcher to work, your cluster **must** have a
+[metrics server](https://github.com/kubernetes-sigs/metrics-server) installed, this often comes installed by default on most Cloud providers.
+If you want to install it locally, please refer to the [terraform configuration](./main.tf) included
+in the project itself.
 
 ## Deployment inside a Kubernetes Cluster
 In order to be able to deploy the ChaosMonkey inside a Kubernetes cluster you **must**
@@ -153,6 +164,9 @@ rules:
   - verbs: ["create", "patch"]
     resources: ["events"]
     apiGroups: ["*"]
+  - verbs: ["get"]
+    resources: ["pods"]
+    apiGroups: ["metrics.k8s.io"]
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1

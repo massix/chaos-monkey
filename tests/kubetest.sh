@@ -11,10 +11,6 @@ source "${DIR_PATH}/library.sh"
 
 set -eo pipefail
 
-checkProgram kubectl "Please install kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl/"
-checkProgram curl "Please install curl: https://curl.se/download.html"
-checkProgram jq "Please install jq: https://stedolan.github.io/jq/download/"
-
 # Check if the cluster has been started
 debug "Check that ${CLUSTER_NAME} exists"
 if ! ${KUBECTL} config get-contexts | grep "kind-${CLUSTER_NAME}" &>/dev/null; then
@@ -60,19 +56,20 @@ fi
 
 deploymentCount=$(${KUBECTL} get deployments --namespace=target --no-headers | wc -l)
 debug "target namespace contains ${deploymentCount} deployment(s)"
-if [[ ${deploymentCount} != 2 ]]; then
-  panic "target namespace should contain 2 deployments"
+if [[ ${deploymentCount} != 3 ]]; then
+  panic "target namespace should contain 3 deployments"
 fi
 
 info "Checking ChaosMonkeyConfigurations"
 cmcCount=$(${KUBECTL} get cmc --namespace=target --no-headers | wc -l)
 debug "target namespace contains ${cmcCount} cmc(s)"
-if [[ ${cmcCount} != 2 ]]; then
-  panic "target namespace should contain 2 cmc"
+if [[ ${cmcCount} != 3 ]]; then
+  panic "target namespace should contain 3 cmc"
 fi
 
 disruptScale="nginx-disrupt-scale"
 disruptPods="nginx-disrupt-pods"
+disruptHpa="nginx-antihpa"
 
 info "Resetting CMCs to initial values"
 
@@ -96,8 +93,20 @@ ${KUBECTL} -n target patch cmc chaosmonkey-${disruptPods} --type json --patch-fi
 ]
 JSONPATCH
 
+debug "Force enable ${disruptHpa}"
+${KUBECTL} -n target patch cmc chaosmonkey-${disruptHpa} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null
+[
+  {"op": "replace", "path": "/spec/enabled", "value": true},
+  {"op": "replace", "path": "/spec/scalingMode", "value": "antiPressure"},
+  {"op": "replace", "path": "/spec/timeout", "value": "10s"}
+]
+JSONPATCH
+
 info "Resetting ${disruptPods} to 2 replicas"
 ${KUBECTL} -n target scale deployment ${disruptPods} --replicas=2 >/dev/null
+
+info "Resetting ${disruptHpa} to 6 replicas"
+${KUBECTL} -n target scale deployment ${disruptHpa} --replicas=6 >/dev/null
 
 info "Checking events"
 if ! ${KUBECTL} -n target get events | grep ChaosMonkey &>/dev/null; then
@@ -110,8 +119,14 @@ replicasShouldChange -d ${disruptScale} -n target -r 5 -s 10
 info "Checking CMC with scalingMode=killPod (${disruptPods})"
 podsShouldChange -l "app=${disruptPods}" -n target -r 5
 
-info "Checking number of pods"
+info "Checking CMC with scalingMode=antiPressure (${disruptHpa})"
+podsShouldChange -l "app=${disruptHpa}" -n target -r 5
+
+info "Checking number of pods for ${disruptPods}"
 numberOfPodsShouldNotChange -l "app=${disruptPods}" -n target -t 2 -L 5
+
+info "Checking number of pods for ${disruptHpa}"
+numberOfPodsShouldNotChange -l "app=${disruptHpa}" -n target -t 6 -L 5
 
 info "Stopping ${disruptScale} CMC"
 if ! ${KUBECTL} patch -n target cmc chaosmonkey-${disruptScale} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
@@ -122,8 +137,20 @@ JSONPATCH
   panic "Could not patch CMC for ${disruptScale}"
 fi
 
+info "Stopping ${disruptHpa} CMC"
+if ! ${KUBECTL} patch -n target cmc chaosmonkey-${disruptHpa} --type json --patch-file=/dev/stdin <<-JSONPATCH >/dev/null; then
+[
+  { "op": "replace", "path": "/spec/enabled", "value": false }
+]
+JSONPATCH
+  panic "Could not patch CMC for ${disruptHpa}"
+fi
+
 info "Checking that CMC ${disruptScale} has been stopped correctly (number of scales should not change over time)"
 replicasShouldNotChange -d ${disruptScale} -n target -l 5 -s 10
+
+info "Checking that CMC ${disruptHpa} has been stopped correctly (pods should not change over time)"
+podsShouldNotChange -l "app=${disruptHpa}" -n target -r 4 -s 10
 
 info "Switching ${disruptPods} from scalingMode=killPod to scalingMode=randomScale"
 if ! ${KUBECTL} patch -n target cmc chaosmonkey-${disruptPods} --type json --patch '[{"op":"replace", "path":"/spec/scalingMode", "value":"randomScale"}]' >/dev/null; then
@@ -181,6 +208,8 @@ ALLMETRICS=(
   "chaos_monkey_crdwatcher_pw_active"
   "chaos_monkey_crdwatcher_dw_spawned"
   "chaos_monkey_crdwatcher_dw_active"
+  "chaos_monkey_crdwatcher_ah_spawned"
+  "chaos_monkey_crdwatcher_ah_active"
   "chaos_monkey_crdwatcher_event_duration_bucket"
   "chaos_monkey_crdwatcher_restarts"
   "chaos_monkey_podwatcher_pods_added"
@@ -191,6 +220,9 @@ ALLMETRICS=(
   "chaos_monkey_deploymentwatcher_deployments_rescaled"
   "chaos_monkey_deploymentwatcher_random_distribution"
   "chaos_monkey_deploymentwatcher_last_scale"
+  "chaos_monkey_antihpawatcher_runs"
+  "chaos_monkey_antihpawatcher_pods_killed"
+  "chaos_monkey_antihpawatcher_average_cpu"
 )
 for m in "${ALLMETRICS[@]}"; do
   metricShouldExist -m "$m" -h "localhost" -p "9090"
@@ -218,8 +250,8 @@ JSONPATCH
   panic "Could not patch namespace"
 fi
 
-# Wait for the ChaosMonkey to terminate
-sleep 5
+# Wait for all the ChaosMonkeys to terminate
+sleep 15
 
 info "Checking that chaosmonkey is disabled for target namespace"
 podsOfNamespaceShouldNotChange -n target

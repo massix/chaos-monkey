@@ -8,7 +8,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
+	cmcv "github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
 	"github.com/massix/chaos-monkey/internal/configuration"
 	"github.com/massix/chaos-monkey/internal/endpoints"
 	"github.com/massix/chaos-monkey/internal/watcher"
@@ -16,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 var Version string
@@ -46,9 +47,10 @@ func main() {
 	}
 
 	clientset := kubernetes.NewForConfigOrDie(cfg)
-	cmcClientset := versioned.NewForConfigOrDie(cfg)
+	cmcClientset := cmcv.NewForConfigOrDie(cfg)
+	metricsClientset := versioned.NewForConfigOrDie(cfg)
 
-	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace, conf.Behavior)
+	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, metricsClientset, nil, namespace, conf.Behavior)
 
 	// Hook signals
 	s := make(chan os.Signal, 1)

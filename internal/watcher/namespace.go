@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
+	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 type NamespaceWatcher struct {
@@ -28,6 +29,7 @@ type NamespaceWatcher struct {
 	Logrus         logrus.FieldLogger
 	Client         kubernetes.Interface
 	CmcClient      mc.Interface
+	MetricsClient  metricsv.Interface
 	Mutex          *sync.Mutex
 	CrdWatchers    map[string]Watcher
 	metrics        *nwMetrics
@@ -135,7 +137,7 @@ func newNwMetrics(rootNamespace, behavior string) *nwMetrics {
 	}
 }
 
-func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interface, recorder record.EventRecorderLogger, rootNamespace string, behavior configuration.Behavior) *NamespaceWatcher {
+func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interface, metricsClient metricsv.Interface, recorder record.EventRecorderLogger, rootNamespace string, behavior configuration.Behavior) *NamespaceWatcher {
 	logrus.Infof("Creating new namespace watcher for namespace %s", rootNamespace)
 
 	if clientset == nil {
@@ -165,6 +167,7 @@ func NewNamespaceWatcher(clientset kubernetes.Interface, cmcClientset mc.Interfa
 		Running:        false,
 		Client:         clientset,
 		CmcClient:      cmcClientset,
+		MetricsClient:  metricsClient,
 		WatcherTimeout: conf.Timeouts.Namespace,
 	}
 }
@@ -354,7 +357,7 @@ func (n *NamespaceWatcher) addWatcher(namespace string) error {
 		return fmt.Errorf("Watcher for namespace %s already exists", namespace)
 	}
 
-	n.CrdWatchers[namespace] = DefaultCrdFactory(n.Client, n.CmcClient, nil, namespace)
+	n.CrdWatchers[namespace] = DefaultCrdFactory(n.Client, n.CmcClient, n.MetricsClient, nil, namespace)
 
 	return nil
 }

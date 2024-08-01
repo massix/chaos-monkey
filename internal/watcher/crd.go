@@ -24,6 +24,7 @@ import (
 	appsv1 "k8s.io/client-go/kubernetes/typed/apps/v1"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
+	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 type WatcherConfiguration struct {
@@ -38,6 +39,7 @@ type CrdWatcher struct {
 	V1                 cmv1.ChaosMonkeyConfigurationInterface
 	Logrus             logrus.FieldLogger
 	Client             kubernetes.Interface
+	MetricsClient      metricsv.Interface
 	metrics            *crdMetrics
 	Mutex              *sync.Mutex
 	DeploymentWatchers map[string]*WatcherConfiguration
@@ -69,6 +71,10 @@ type crdMetrics struct {
 	dwSpawned prometheus.Counter
 	dwActive  prometheus.Gauge
 
+	// Metrics for AntiHPAWatchers
+	ahSpawned prometheus.Counter
+	ahActive  prometheus.Gauge
+
 	// How long it takes to handle an event
 	eventDuration prometheus.Histogram
 }
@@ -82,6 +88,8 @@ func (crd *crdMetrics) unregister() {
 	prometheus.Unregister(crd.pwActive)
 	prometheus.Unregister(crd.dwSpawned)
 	prometheus.Unregister(crd.dwActive)
+	prometheus.Unregister(crd.ahSpawned)
+	prometheus.Unregister(crd.ahActive)
 	prometheus.Unregister(crd.eventDuration)
 }
 
@@ -149,6 +157,21 @@ func newCrdMetrics(namespace string) *crdMetrics {
 			ConstLabels: map[string]string{"namespace": namespace},
 		}),
 
+		ahSpawned: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "ah_spawned",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of AntiHPAWatchers active",
+			ConstLabels: map[string]string{"namespace": namespace},
+		}),
+		ahActive: promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace:   "chaos_monkey",
+			Name:        "ah_active",
+			Subsystem:   "crdwatcher",
+			Help:        "Total number of AntiHPAWatchers active",
+			ConstLabels: map[string]string{"namespace": namespace},
+		}),
+
 		eventDuration: promauto.NewHistogram(prometheus.HistogramOpts{
 			Namespace:   "chaos_monkey",
 			Name:        "event_duration",
@@ -160,7 +183,7 @@ func newCrdMetrics(namespace string) *crdMetrics {
 	}
 }
 
-func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interface, recorder record.EventRecorderLogger, namespace string) *CrdWatcher {
+func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interface, metricsClient metricsv.Interface, recorder record.EventRecorderLogger, namespace string) *CrdWatcher {
 	// Build my own recorder here
 	if recorder == nil {
 		logrus.Debug("No recorder provided, using default")
@@ -178,6 +201,7 @@ func NewCrdWatcher(clientset kubernetes.Interface, cmcClientset typedcmc.Interfa
 
 		Logrus:             logrus.WithFields(logrus.Fields{"component": "CRDWatcher", "namespace": namespace}),
 		Client:             clientset,
+		MetricsClient:      metricsClient,
 		Mutex:              &sync.Mutex{},
 		DeploymentWatchers: map[string]*WatcherConfiguration{},
 		ForceStopChan:      make(chan interface{}),
@@ -394,17 +418,16 @@ func (c *CrdWatcher) addWatcher(cmc *v1.ChaosMonkeyConfiguration, dep *apiappsv1
 	}
 
 	var newWatcher ConfigurableWatcher
+	var combinedLabelSelector []string
+	for label, value := range dep.Spec.Selector.MatchLabels {
+		combinedLabelSelector = append(combinedLabelSelector, fmt.Sprintf("%s=%s", label, value))
+	}
 
 	switch cmc.Spec.ScalingMode {
 	case v1.ScalingModeKillPod:
 		c.Logrus.Debug("Creating new pod watcher")
 		if dep.Spec.Selector == nil || len(dep.Spec.Selector.MatchLabels) == 0 {
 			return fmt.Errorf("No selector labels found for deployment %s", dep.Name)
-		}
-
-		var combinedLabelSelector []string
-		for label, value := range dep.Spec.Selector.MatchLabels {
-			combinedLabelSelector = append(combinedLabelSelector, fmt.Sprintf("%s=%s", label, value))
 		}
 
 		c.Logrus.Debugf("Configuring watcher with %+v", cmc.Spec)
@@ -414,6 +437,10 @@ func (c *CrdWatcher) addWatcher(cmc *v1.ChaosMonkeyConfiguration, dep *apiappsv1
 		c.Logrus.Debug("Creating new deployment watcher")
 		newWatcher = DefaultDeploymentFactory(c.Client, nil, dep)
 		c.metrics.dwSpawned.Inc()
+	case v1.ScalingModeAntiPressure:
+		c.Logrus.Debug("Creating new AntiHPDA watcher")
+		c.metrics.ahSpawned.Inc()
+		newWatcher = DefaultAntiHPAFactory(c.MetricsClient, c.Client.CoreV1().Pods(cmc.Namespace), dep.Namespace, strings.Join(combinedLabelSelector, ","))
 	default:
 		return fmt.Errorf("Unhandled scaling mode: %s", cmc.Spec.ScalingMode)
 	}
@@ -450,6 +477,8 @@ func (c *CrdWatcher) startWatcher(ctx context.Context, forDeployment string, wg 
 		activeMetric = c.metrics.pwActive
 	case *DeploymentWatcher:
 		activeMetric = c.metrics.dwActive
+	case *AntiHPAWatcher:
+		activeMetric = c.metrics.ahActive
 	}
 
 	if activeMetric != nil {
@@ -499,22 +528,25 @@ func (c *CrdWatcher) modifyWatcher(ctx context.Context, cmc *v1.ChaosMonkeyConfi
 			return err
 		}
 
+		allLabels := []string{}
+		for key, val := range dep.Spec.Selector.MatchLabels {
+			allLabels = append(allLabels, fmt.Sprintf("%s=%s", key, val))
+		}
+
 		var newWatcher ConfigurableWatcher
 		switch cmc.Spec.ScalingMode {
 		case v1.ScalingModeKillPod:
 			c.Logrus.Debug("Creating new Pod watcher")
-
-			allLabels := []string{}
-			for key, val := range dep.Spec.Selector.MatchLabels {
-				allLabels = append(allLabels, fmt.Sprintf("%s=%s", key, val))
-			}
-
 			newWatcher = DefaultPodFactory(c.Client, nil, dep.Namespace, allLabels...)
 			c.metrics.pwSpawned.Inc()
 		case v1.ScalingModeRandomScale:
 			c.Logrus.Debug("Creating new Deployment watcher")
 			newWatcher = DefaultDeploymentFactory(c.Client, nil, dep)
 			c.metrics.dwSpawned.Inc()
+		case v1.ScalingModeAntiPressure:
+			c.Logrus.Debug("Creating new AntiHPA watcher")
+			newWatcher = DefaultAntiHPAFactory(c.MetricsClient, c.Client.CoreV1().Pods(cmc.Namespace), dep.Namespace, strings.Join(allLabels, ","))
+			c.metrics.ahSpawned.Inc()
 		default:
 			return fmt.Errorf("Unhandled scaling mode: %s", cmc.Spec.ScalingMode)
 		}
@@ -534,6 +566,8 @@ func (c *CrdWatcher) modifyWatcher(ctx context.Context, cmc *v1.ChaosMonkeyConfi
 			activeMetric = c.metrics.pwActive
 		case *DeploymentWatcher:
 			activeMetric = c.metrics.dwActive
+		case *AntiHPAWatcher:
+			activeMetric = c.metrics.ahActive
 		}
 
 		if activeMetric != nil {

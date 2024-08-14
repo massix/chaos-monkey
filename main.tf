@@ -2,23 +2,23 @@ terraform {
   required_providers {
     kind = {
       source  = "tehcyx/kind"
-      version = "~>0.5.1"
+      version = "~>0.5"
     }
     docker = {
       source  = "kreuzwerker/docker"
-      version = "~>3.0.1"
+      version = "~>3.0"
     }
     shell = {
       source  = "scottwinkler/shell"
-      version = "~>1.7.10"
+      version = "~>1.7"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~>2.31.0"
+      version = "~>2.31"
     }
     kubectl = {
       source  = "alekc/kubectl"
-      version = "~>2.0.4"
+      version = "~>2.0"
     }
   }
 }
@@ -59,6 +59,7 @@ resource "docker_image" "chaos-monkey-image" {
   triggers = {
     dockerFile = sha256(file("${path.module}/Dockerfile"))
     binFile    = sha256(filebase64("${path.module}/bin/chaos-monkey"))
+    certFile   = sha256(file("${path.module}/certs/chaos-monkey.chaosmonkey.svc.crt"))
   }
 }
 
@@ -89,7 +90,7 @@ resource "kubernetes_namespace" "target-namespace" {
 
 resource "kubectl_manifest" "deployment-mode-crd" {
   yaml_body = <<YAML
-    apiVersion: cm.massix.github.io/v1alpha1
+    apiVersion: cm.massix.github.io/v1
     kind: ChaosMonkeyConfiguration
     metadata:
       name: chaosmonkey-nginx-disrupt-scale
@@ -99,18 +100,22 @@ resource "kubectl_manifest" "deployment-mode-crd" {
       minReplicas: 0
       maxReplicas: 9
       timeout: 10s
-      deploymentName: ${kubernetes_deployment.nginx-disrupt-scale.metadata.0.name}
-      podMode: false
+      deployment:
+        name: ${kubernetes_deployment.nginx-disrupt-scale.metadata.0.name}
+      scalingMode: randomScale
   YAML
 
   validate_schema = true
 
-  depends_on = [kubernetes_deployment.nginx-disrupt-scale]
+  depends_on = [
+    kubernetes_deployment.nginx-disrupt-scale,
+    kubernetes_deployment.chaos-monkey-deployment
+  ]
 }
 
 resource "kubectl_manifest" "pods-mode-crd" {
   yaml_body = <<YAML
-    apiVersion: cm.massix.github.io/v1alpha1
+    apiVersion: cm.massix.github.io/v1
     kind: ChaosMonkeyConfiguration
     metadata:
       name: chaosmonkey-nginx-disrupt-pods
@@ -120,13 +125,42 @@ resource "kubectl_manifest" "pods-mode-crd" {
       minReplicas: 0
       maxReplicas: 9
       timeout: 10s
-      deploymentName: ${kubernetes_deployment.nginx-disrupt-pods.metadata.0.name}
-      podMode: true
+      deployment:
+        name: ${kubernetes_deployment.nginx-disrupt-pods.metadata.0.name}
+      scalingMode: killPod
   YAML
 
   validate_schema = true
 
-  depends_on = [kubernetes_deployment.nginx-disrupt-pods]
+  depends_on = [
+    kubernetes_deployment.nginx-disrupt-pods,
+    kubernetes_deployment.chaos-monkey-deployment
+  ]
+}
+
+resource "kubectl_manifest" "pods-mode-antihpa" {
+  yaml_body = <<YAML
+    apiVersion: cm.massix.github.io/v1
+    kind: ChaosMonkeyConfiguration
+    metadata:
+      name: chaosmonkey-nginx-antihpa
+      namespace: ${kubernetes_namespace.target-namespace.id}
+    spec:
+      enabled: true
+      minReplicas: 0
+      maxReplicas: 4
+      timeout: 10s
+      deployment:
+        name: ${kubernetes_deployment.nginx-anti-hpa.metadata.0.name}
+      scalingMode: antiPressure
+  YAML
+
+  validate_schema = true
+
+  depends_on = [
+    kubernetes_deployment.nginx-anti-hpa,
+    kubernetes_deployment.chaos-monkey-deployment
+  ]
 }
 
 resource "kubectl_manifest" "crd" {
@@ -156,6 +190,12 @@ resource "kubernetes_cluster_role" "chaos-monkey-cr" {
   }
 
   rule {
+    api_groups = ["metrics.k8s.io"]
+    resources  = ["pods"]
+    verbs      = ["get", "list"]
+  }
+
+  rule {
     api_groups = ["*"]
     resources  = ["deployments"]
     verbs      = ["patch", "get", "scale", "update"]
@@ -176,7 +216,7 @@ resource "kubernetes_cluster_role" "chaos-monkey-cr" {
   rule {
     api_groups = ["*"]
     resources  = ["pods"]
-    verbs      = ["watch", "delete"]
+    verbs      = ["get", "list", "watch", "delete"]
   }
 
   rule {
@@ -272,6 +312,11 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
             name           = "http"
             protocol       = "TCP"
           }
+          port {
+            container_port = 9443
+            name           = "https"
+            protocol       = "TCP"
+          }
         }
       }
     }
@@ -280,7 +325,8 @@ resource "kubernetes_deployment" "chaos-monkey-deployment" {
   # Make sure we deploy the image before
   depends_on = [
     shell_script.inject-image,
-    kubectl_manifest.crd
+    kubectl_manifest.crd,
+    kubectl_manifest.metrics-server
   ]
 
   # Redeploy whenever we inject a new image or change the crd
@@ -307,6 +353,11 @@ resource "kubernetes_service" "chaos-monkey" {
       name        = "http"
       port        = 80
       target_port = "http"
+    }
+    port {
+      name        = "https"
+      port        = 443
+      target_port = "https"
     }
   }
 }
@@ -384,3 +435,52 @@ resource "kubernetes_deployment" "nginx-disrupt-pods" {
 
   wait_for_rollout = true
 }
+
+// We are going to apply the AntiHPA scaling mode to this deployment
+resource "kubernetes_deployment" "nginx-anti-hpa" {
+  metadata {
+    name      = "nginx-antihpa"
+    namespace = kubernetes_namespace.target-namespace.id
+  }
+
+  spec {
+    replicas = 6
+    selector {
+      match_labels = {
+        app = "nginx-antihpa"
+      }
+    }
+    template {
+      metadata {
+        labels = {
+          app = "nginx-antihpa"
+        }
+      }
+      spec {
+        container {
+          image = "nginx:alpine"
+          name  = "nginx"
+          port {
+            container_port = 80
+            name           = "http"
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_rollout = true
+}
+
+// Patched metrics-server
+data "kubectl_file_documents" "metrics-server-manifest" {
+  content = file("${path.module}/tests/manifests/components.yaml")
+}
+
+// Install the metrics-server, used for the antiHPA scaler
+resource "kubectl_manifest" "metrics-server" {
+  for_each         = data.kubectl_file_documents.metrics-server-manifest.manifests
+  yaml_body        = each.value
+  wait_for_rollout = true
+}
+

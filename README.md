@@ -1,58 +1,52 @@
+# Chaos Monkey
+
 <div align="center">
-  <img src="./assets/cm-nobg.png" width="300px">
+  <img src="./assets/cm-nobg.png" width="400px" />
 </div>
 
-# Chaos Monkey
-This small project written using [Golang](https://go.dev) implements the ideas of the
-[Netflix's Chaos Monkey](https://netflix.github.io/chaosmonkey/) natively for
-[Kubernetes](https://kubernetes.io) clusters.
+[Golang](https://go.dev) implementation of the ideas of [Netflix's Chaos Monkey](https://netflix.github.io/chaosmonkey/) natively for [Kubernetes](https://kubernetes.io) clusters.
 
-For this small project I have decided not to use the official
-[Operator Framework for Golang](https://sdk.operatorframework.io/docs/building-operators/golang/tutorial/),
+For this small project I have decided not to use the official [Operator Framework for Golang](https://sdk.operatorframework.io/docs/building-operators/golang/tutorial/),
 mainly because I wanted to familiarize with the core concepts of CRDs and Watchers with Golang
 before adventuring further. In the future I might want to migrate to using the Operator Framework.
 
 ## Architecture
 The architecture of the Chaos Monkey is fairly simple and all fits in a single Pod.
-As you can imagine, we rely heavily on
-[Kubernetes' API](https://kubernetes.io/docs/reference/using-api/api-concepts/) to react
-based on what happens inside the cluster.
+As you can imagine, we rely heavily on [Kubernetes' API](https://kubernetes.io/docs/reference/using-api/api-concepts/) to react based on what happens inside the cluster.
 
 Four main components are part of the current architecture.
 
 <div align="center">
-  <img src="./assets/cm-architecture.png" width="600px">
+  <img src="./assets/cm-architecture.png" width="600px" />
 </div>
 
 ### Namespace Watcher
 The code for the `NamespaceWatcher` can be found [here](./internal/watcher/namespace.go).
+
 Its role is to constantly monitor the changes in the Namespaces of the cluster, and start
 the CRD Watchers for those Namespaces. We start the watch by passing `ResourceVersion: ""`
 to the Kubernetes API, which means that the first events we receive are synthetic events
 (`ADD`) to help us rebuild the current state of the cluster. After that, we react to both
 the `ADDED` and the `DELETED` events accordingly.
 
-Basically, it spawns a new [goroutine](https://go.dev/tour/concurrency/1) with a
-[CRD Watcher](#crd-watcher) every time a new namespace is detected and it stops the
-corresponding goroutine when a namespace is deleted.
+Basically, it spawns a new [goroutine](https://go.dev/tour/concurrency/1) with a [CRD Watcher](#crd-watcher) every time a new namespace is
+detected and it stops the corresponding goroutine when a namespace is deleted.
 
-The Namespace can be [configured](#configuration) to either monitor all namespaces by
-default (with an opt-out strategy) or to monitor only the namespaces which contain the
-label `cm.massix.github.io/namespace="true"`. Check the [Configuration](#configuration)
-paragraph for more details.
+The Namespace can be [configured](#configuration) to either monitor all namespaces by default (with an
+opt-out strategy) or to monitor only the namespaces which contain the label
+`cm.massix.github.io/namespace="true"`.
+
+Check the [Configuration](#configuration) paragraph for more details.
 
 ### CRD Watcher
-We make use of a
-[Custom Resource Definition (CRD)](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/)
-in order to trigger the Chaos Monkey. The CRD is defined using the
-[OpenAPI](https://www.openapis.org/) specification, which you can find
-[here](./crds/chaosmonkey-configuration.yaml).
+We make use of a [Custom Resource Definition (CRD)](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/) in order to trigger the Chaos Monkey.
+The CRD is defined using the [OpenAPI](https://www.openapis.org/) specification, which you can find [here](./crds/chaosmonkey-configuration.yaml).
 
-Following the schema, this is a valid definition of a CRD which can be injected inside of
-a namespace:
+Following the schema, this is a valid definition of a CRD which can be injected inside
+of a namespace:
 
 ```yaml
-apiVersion: cm.massix.github.io/v1alpha1
+apiVersion: cm.massix.github.io/v1
 kind: ChaosMonkeyConfiguration
 metadata:
   name: chaosmonkey-nginx
@@ -62,8 +56,9 @@ spec:
   minReplicas: 0
   maxReplicas: 9
   timeout: 10s
-  deploymentName: nginx
-  podMode: true
+  deployment:
+    name: nginx
+  scalingMode: killPod
 ```
 
 The CRD is **namespaced**, meaning that it **must** reside inside a Namespace and cannot be
@@ -74,12 +69,17 @@ The CRD Watcher, similarly to the [namespace one](#namespace-watcher), reacts to
 reacts to the `MODIFIED` event, making it possible to modify a configuration while the
 Monkey is running.
 
-Depending on the value of the `podMode` flag, the CRD watcher will either create a
+Depending on the value of the `scalingMode` flag, the CRD watcher will either create a
 [DeploymentWatcher](#deployment-watcher) or a [PodWatcher](#pod-watcher) The difference between
 the two is highlighted in the right paragraph, but in short: the DeploymentWatcher
 operates by modifying the `spec.replicas` field of the Deployment, using the
 `deployment/scale` APIs, while the PodWatcher simply deletes a random pod using the
 same `spec.selector` value of the targeted Deployment.
+
+As of now, three values are supported by the `scalingMode` field:
+* `randomScale`, which will create a [DeploymentWatcher](#deployment-watcher), it will randomly modify the scales of the given deployment;
+* `killPod`, which will create a [PodWatcher](#pod-watcher), it will randomly kill a pod;
+* `antiPressure`, which will create a [AntiPressureWatcher](#antipressure-watcher).
 
 ### Deployment Watcher
 This is where the fun begins, the Deployment Watcher is responsible of creating the
@@ -102,6 +102,17 @@ of the CRD, it will randomly kill a pod matching the field.
 
 The Pod Watcher **ignores** the `maxReplicas` and `minReplicas` fields of the CRD,
 thus generating real chaos inside the cluster.
+
+### AntiPressure Watcher
+This is another point where the fun begins. The AntiPressure Watcher is responsible
+of creating Chaos inside the cluster by detecting which pod of a given container
+is using the most CPU and simply kill it. It works the opposite of a classic
+[Horizontal Pod Autoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/), in the code is often referred to as `antiHPA` for this reason.
+
+**WARNING**: for the AntiPressure Watcher to work, your cluster **must** have a
+[metrics server](https://github.com/kubernetes-sigs/metrics-server) installed, this often comes installed by default on most Cloud providers.
+If you want to install it locally, please refer to the [terraform configuration](./main.tf) included
+in the project itself.
 
 ## Deployment inside a Kubernetes Cluster
 In order to be able to deploy the ChaosMonkey inside a Kubernetes cluster you **must**
@@ -153,6 +164,9 @@ rules:
   - verbs: ["create", "patch"]
     resources: ["events"]
     apiGroups: ["*"]
+  - verbs: ["get"]
+    resources: ["pods"]
+    apiGroups: ["metrics.k8s.io"]
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -178,6 +192,17 @@ spec:
     spec:
       serviceAccountName: chaosmonkey
 ```
+
+## A note on CRD
+The CRD defines multiple versions of the APIs (at the moment two versions are supported:
+`v1alpha1` and `v1`). You should **always** use the latest version available (`v1`), but
+there is a conversion endpoint in case you are still using the older version of the API.
+
+The only caveat is that if you **need** to use the conversion Webhook, you **must** install the
+chaosmonkey in a namespace named `chaosmonkey` and create a service named `chaos-monkey`
+for it.
+
+If in doubt, do not use the older version of the API.
 
 ## Configuration
 There are some configurable parts of the ChaosMonkey (on top of what the [CRD](./crds/chaosmonkey-configuration.yaml)
@@ -290,6 +315,11 @@ of kubernetes included in the `client-go` library. The problem is that when test
 with mocks, most of the times you end up testing the mocks and not the code. That's
 the reason why there are also some [integration tests](#integration-tests) included.
 
+For the future, I have plans to completely rewrite the way the tests are run, create
+more _pure_ functions and test those functions in the unit tests, and let the
+[integration tests](#integration-tests) do the rest. If you want to help me out in reaching this goal, feel
+free to open a pull request!
+
 ### Integration Tests
 These tests should cover the basic functionalities of the Chaos Monkey in a local
 Kubernetes cluster. The script file is [here](./tests/kubetest.sh) and before launching
@@ -303,3 +333,6 @@ It should be as easy as launching:
 You can also activate a more verbose logging for the tests with
 
     TEST_DEBUG=true ./tests/kubetest.sh
+
+# Contributions
+All kinds of contributions are welcome, simply open a pull request or an issue!

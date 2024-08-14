@@ -10,7 +10,7 @@ import (
 	"time"
 
 	cmc "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/fake"
-	"github.com/massix/chaos-monkey/internal/apis/v1alpha1"
+	v1 "github.com/massix/chaos-monkey/internal/apis/v1"
 	"github.com/massix/chaos-monkey/internal/watcher"
 	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
@@ -19,8 +19,11 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	k "k8s.io/client-go/kubernetes"
 	kubernetes "k8s.io/client-go/kubernetes/fake"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	ktest "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
+	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
+	fakemetrics "k8s.io/metrics/pkg/client/clientset/versioned/fake"
 )
 
 type FakeDeploymentWatcher struct {
@@ -99,7 +102,7 @@ func (f *FakeDeploymentWatcher) Close() error {
 var _ watcher.ConfigurableWatcher = &FakeDeploymentWatcher{}
 
 func TestCRDWatcher_Create(t *testing.T) {
-	w := watcher.DefaultCrdFactory(kubernetes.NewSimpleClientset(), cmc.NewSimpleClientset(), record.NewFakeRecorder(1024), "chaos-monkey")
+	w := watcher.NewCrdWatcher(kubernetes.NewSimpleClientset(), cmc.NewSimpleClientset(), fakemetrics.NewSimpleClientset(), record.NewFakeRecorder(1024), "chaos-monkey")
 	defer w.Close()
 
 	if w.IsRunning() {
@@ -107,18 +110,18 @@ func TestCRDWatcher_Create(t *testing.T) {
 	}
 }
 
-func createCMC(name string, enabled, podMode bool, minReplicas, maxReplicas int, deploymentName, timeout string) *v1alpha1.ChaosMonkeyConfiguration {
-	return &v1alpha1.ChaosMonkeyConfiguration{
+func createCMC(name string, enabled bool, scalingMode v1.ScalingMode, minReplicas, maxReplicas int, deploymentName string, timeout time.Duration) *v1.ChaosMonkeyConfiguration {
+	return &v1.ChaosMonkeyConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
-		Spec: v1alpha1.ChaosMonkeyConfigurationSpec{
-			Enabled:        enabled,
-			MinReplicas:    minReplicas,
-			MaxReplicas:    maxReplicas,
-			DeploymentName: deploymentName,
-			Timeout:        timeout,
-			PodMode:        podMode,
+		Spec: v1.ChaosMonkeyConfigurationSpec{
+			Enabled:     enabled,
+			MinReplicas: minReplicas,
+			MaxReplicas: maxReplicas,
+			Timeout:     timeout,
+			ScalingMode: scalingMode,
+			Deployment:  v1.ChaosMonkeyConfigurationSpecDeployment{Name: deploymentName},
 		},
 	}
 }
@@ -127,7 +130,8 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientSet := kubernetes.NewSimpleClientset()
 	cmClientset := cmc.NewSimpleClientset()
-	w := watcher.DefaultCrdFactory(clientSet, cmClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.CrdWatcher)
+	metricsClientset := fakemetrics.NewSimpleClientset()
+	w := watcher.NewCrdWatcher(clientSet, cmClientset, metricsClientset, record.NewFakeRecorder(1024), "chaos-monkey")
 	w.CleanupTimeout = 1 * time.Second
 
 	// Inject my Deployment Factory
@@ -140,16 +144,21 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 		return &FakeDeploymentWatcher{Mutex: &sync.Mutex{}, DeploymentName: namespace, IsPodMode: true}
 	}
 
+	// Inject my AntiHPA Factory
+	watcher.DefaultAntiHPAFactory = func(client metricsv.Interface, podset typedcorev1.PodInterface, namespace, podLabel string) watcher.ConfigurableWatcher {
+		return &FakeDeploymentWatcher{Mutex: &sync.Mutex{}, DeploymentName: namespace, IsPodMode: true}
+	}
+
 	// Create the scenario
 	cmClientset.PrependWatchReactor("chaosmonkeyconfigurations", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
 		fakeWatch := watch.NewFake()
 
 		go func() {
-			fakeWatch.Add(createCMC("test-1", true, false, 1, 1, "test-1", "1s"))
-			fakeWatch.Add(createCMC("test-2", false, true, 1, 1, "test-2", "10s"))
-			fakeWatch.Add(createCMC("test-3", true, true, 1, 1, "test-3", "invalidstring"))
-			fakeWatch.Modify(createCMC("test-1", true, false, 4, 8, "test-1", "1s"))
-			fakeWatch.Delete(createCMC("test-2", true, false, 4, 8, "test-2", "1s"))
+			fakeWatch.Add(createCMC("test-1", true, v1.ScalingModeRandomScale, 1, 1, "test-1", 1*time.Second))
+			fakeWatch.Add(createCMC("test-2", false, v1.ScalingModeKillPod, 1, 1, "test-2", 10*time.Second))
+			fakeWatch.Add(createCMC("test-3", true, v1.ScalingModeAntiPressure, 1, 1, "test-3", 10*time.Minute))
+			fakeWatch.Modify(createCMC("test-1", true, v1.ScalingModeRandomScale, 4, 8, "test-1", 1*time.Second))
+			fakeWatch.Delete(createCMC("test-2", true, v1.ScalingModeRandomScale, 4, 8, "test-2", 1*time.Second))
 		}()
 
 		return true, fakeWatch, nil
@@ -158,7 +167,6 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 	// Setup the scenario for the deployments too
 	clientSet.PrependReactor("get", "deployments", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
 		askedDeployment := action.(ktest.GetAction).GetName()
-		t.Logf("Asked deployment %s", askedDeployment)
 		dep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: askedDeployment,
@@ -217,9 +225,9 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 		t.Error("Deployment for test-1 not found")
 	}
 
-	// The deployment for "test-3" should have the default timeout of 5 minutes
+	// The deployment for "test-3" should have the default timeout of 10 minutes
 	if !testDW("test-3", func(d *FakeDeploymentWatcher) {
-		if d.Timeout != 5*time.Minute {
+		if d.Timeout != 10*time.Minute {
 			t.Errorf("Expected 5 minutes timeout, got %s", d.Timeout)
 		}
 	}) {
@@ -248,14 +256,15 @@ func TestCRDWatcher_BasicBehaviour(t *testing.T) {
 func TestCRDWatcher_Error(t *testing.T) {
 	clientSet := kubernetes.NewSimpleClientset()
 	cmClientset := cmc.NewSimpleClientset()
-	w := watcher.DefaultCrdFactory(clientSet, cmClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.CrdWatcher)
+	metricsClientset := fakemetrics.NewSimpleClientset()
+	w := watcher.NewCrdWatcher(clientSet, cmClientset, metricsClientset, record.NewFakeRecorder(1024), "chaos-monkey")
 	w.CleanupTimeout = 1 * time.Second
 
 	// Setup the scenario for the CMCs
 	cmClientset.PrependWatchReactor("chaosmonkeyconfigurations", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
 		fakeWatch := watch.NewFake()
 		go func() {
-			fakeWatch.Error(&v1alpha1.ChaosMonkeyConfiguration{
+			fakeWatch.Error(&v1.ChaosMonkeyConfiguration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test",
 				},
@@ -271,8 +280,6 @@ func TestCRDWatcher_Error(t *testing.T) {
 	go func() {
 		if err := w.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "Empty event or error from CRD watcher") {
 			t.Errorf("Expected error, got %+v instead", err)
-		} else {
-			t.Logf("Expected: %s", err)
 		}
 
 		done <- struct{}{}
@@ -290,7 +297,8 @@ func TestCRDWatcher_Error(t *testing.T) {
 func TestCRDWatcher_Cleanup(t *testing.T) {
 	clientSet := kubernetes.NewSimpleClientset()
 	cmClientset := cmc.NewSimpleClientset()
-	w := watcher.DefaultCrdFactory(clientSet, cmClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.CrdWatcher)
+	metricsClientset := fakemetrics.NewSimpleClientset()
+	w := watcher.NewCrdWatcher(clientSet, cmClientset, metricsClientset, record.NewFakeRecorder(1024), "chaos-monkey")
 	w.CleanupTimeout = 1 * time.Second
 
 	// Inject some FakeDeploymentWatchers inside the watcher itself
@@ -351,7 +359,8 @@ func TestCRDWatcher_Cleanup(t *testing.T) {
 func TestCRDWatcher_Restart(t *testing.T) {
 	clientSet := kubernetes.NewSimpleClientset()
 	cmClientset := cmc.NewSimpleClientset()
-	w := watcher.DefaultCrdFactory(clientSet, cmClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.CrdWatcher)
+	metricsClientset := fakemetrics.NewSimpleClientset()
+	w := watcher.NewCrdWatcher(clientSet, cmClientset, metricsClientset, record.NewFakeRecorder(1024), "chaos-monkey")
 	w.CleanupTimeout = 1 * time.Second
 	timesRestarted := &atomic.Int32{}
 	timesRestarted.Store(0)
@@ -368,7 +377,7 @@ func TestCRDWatcher_Restart(t *testing.T) {
 		go func() {
 			for i := range [10]int{} {
 				depName := fmt.Sprintf("test-%d", i)
-				fakeWatch.Add(createCMC(depName, false, false, 0, 10, depName, "10s"))
+				fakeWatch.Add(createCMC(depName, false, v1.ScalingModeRandomScale, 0, 10, depName, 10*time.Second))
 				time.Sleep(100 * time.Millisecond)
 			}
 
@@ -379,7 +388,14 @@ func TestCRDWatcher_Restart(t *testing.T) {
 
 	clientSet.PrependReactor("get", "deployments", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
 		requestedName := action.(ktest.GetAction).GetName()
-		return true, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: requestedName}}, nil
+		return true, &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: requestedName},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": requestedName},
+				},
+			},
+		}, nil
 	})
 
 	// Start the watcher in background
@@ -417,7 +433,8 @@ func TestCRDWatcher_Restart(t *testing.T) {
 func TestCRDWatcher_ModifyWatcherType(t *testing.T) {
 	clientSet := kubernetes.NewSimpleClientset()
 	cmClientset := cmc.NewSimpleClientset()
-	w := watcher.DefaultCrdFactory(clientSet, cmClientset, record.NewFakeRecorder(1024), "chaos-monkey").(*watcher.CrdWatcher)
+	metricsClientset := fakemetrics.NewSimpleClientset()
+	w := watcher.NewCrdWatcher(clientSet, cmClientset, metricsClientset, record.NewFakeRecorder(1024), "chaos-monkey")
 	w.CleanupTimeout = 1 * time.Second
 
 	// Number of times each watcher has been created
@@ -450,8 +467,8 @@ func TestCRDWatcher_ModifyWatcherType(t *testing.T) {
 
 	cmClientset.PrependWatchReactor("chaosmonkeyconfigurations", func(action ktest.Action) (handled bool, ret watch.Interface, err error) {
 		go func() {
-			fakeWatch.Add(createCMC("test-deploy", false, false, 0, 10, "test-deploy", "10s"))
-			fakeWatch.Add(createCMC("test-pod", false, true, 0, 10, "test-pod", "10s"))
+			fakeWatch.Add(createCMC("test-deploy", false, v1.ScalingModeRandomScale, 0, 10, "test-deploy", 10*time.Second))
+			fakeWatch.Add(createCMC("test-pod", false, v1.ScalingModeKillPod, 0, 10, "test-pod", 10*time.Second))
 		}()
 
 		return true, fakeWatch, nil
@@ -486,7 +503,7 @@ func TestCRDWatcher_ModifyWatcherType(t *testing.T) {
 	w.Mutex.Unlock()
 
 	// Now send a Modify event
-	fakeWatch.Modify(createCMC("test-deploy", false, true, 0, 10, "test-deploy", "10s"))
+	fakeWatch.Modify(createCMC("test-deploy", false, v1.ScalingModeKillPod, 0, 10, "test-deploy", 10*time.Second))
 	time.Sleep(100 * time.Millisecond)
 
 	// We should still have 2 watchers
@@ -507,7 +524,7 @@ func TestCRDWatcher_ModifyWatcherType(t *testing.T) {
 	w.Mutex.Unlock()
 
 	// Now send another Modify event
-	fakeWatch.Modify(createCMC("test-pod", false, false, 0, 10, "test-pod", "10s"))
+	fakeWatch.Modify(createCMC("test-pod", false, v1.ScalingModeRandomScale, 0, 10, "test-pod", 10*time.Second))
 	time.Sleep(100 * time.Millisecond)
 
 	// Still 2 watchers

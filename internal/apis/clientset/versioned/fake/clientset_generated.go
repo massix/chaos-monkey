@@ -6,6 +6,8 @@ package fake
 
 import (
 	clientset "github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
+	chaosmonkeyconfigurationv1 "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1"
+	fakechaosmonkeyconfigurationv1 "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1/fake"
 	chaosmonkeyconfigurationv1alpha1 "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1alpha1"
 	fakechaosmonkeyconfigurationv1alpha1 "github.com/massix/chaos-monkey/internal/apis/clientset/versioned/typed/apis/v1alpha1/fake"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -64,6 +66,11 @@ var (
 	_ clientset.Interface = &Clientset{}
 	_ testing.FakeClient  = &Clientset{}
 )
+
+// ChaosMonkeyConfigurationV1 retrieves the ChaosMonkeyConfigurationV1Client
+func (c *Clientset) ChaosMonkeyConfigurationV1() chaosmonkeyconfigurationv1.ChaosMonkeyConfigurationV1Interface {
+	return &fakechaosmonkeyconfigurationv1.FakeChaosMonkeyConfigurationV1{Fake: &c.Fake}
+}
 
 // ChaosMonkeyConfigurationV1alpha1 retrieves the ChaosMonkeyConfigurationV1alpha1Client
 func (c *Clientset) ChaosMonkeyConfigurationV1alpha1() chaosmonkeyconfigurationv1alpha1.ChaosMonkeyConfigurationV1alpha1Interface {

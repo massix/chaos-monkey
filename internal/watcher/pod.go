@@ -92,7 +92,7 @@ func newPwMetrics(namespace, combinedLabelSelector string) *pwMetrics {
 
 var _ = (ConfigurableWatcher)((*PodWatcher)(nil))
 
-func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, namespace string, labelSelector ...string) ConfigurableWatcher {
+func NewPodWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, namespace string, labelSelector ...string) *PodWatcher {
 	logrus.Infof("Creating pod watcher in namespace %s for label selector %s", namespace, labelSelector)
 
 	if recorder == nil {

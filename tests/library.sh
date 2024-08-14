@@ -32,6 +32,7 @@ function checkProgram() {
 # Check that we have everything we need to run the tests
 checkProgram kubectl "Please install kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl/"
 checkProgram curl "Please install curl: https://curl.se/download.html"
+checkProgram jq "Please install jq: https://stedolan.github.io/jq/download/"
 
 # Checks that the scale value of a given deployment change over time
 # @param -d deploymentName (mandatory), the name of the deployment to watch
@@ -223,6 +224,74 @@ function podsShouldChange() {
 
   if [[ ${testSuccess} -eq 0 ]]; then
     panic "Pods for \"${selector}\" did not change after ${retries} retries"
+  fi
+}
+
+# Checks that the pods of a given deployment do not change over time
+# @params -l selector (mandatory), the selector of the deployment
+# @params -n namespace (mandatory), the namespace of the deployment
+# @params -r retries (default: 10), maximum number of retries
+# @params -s sleep (default: 10), seconds to sleep between one loop and the other
+function podsShouldNotChange() {
+  local OPTIND OPTARG
+
+  local selector=""
+  local namespace=""
+  local -i retries=10
+  local -i sleepDuration=10
+
+  local -i completedLoops=0
+  local -r jsonPath="{.items[*].metadata.name}"
+  local -i testSuccess=0
+  local currentPods
+  local newPods
+
+  while getopts "l:n:r:s:" opt; do
+    case "${opt}" in
+    l)
+      selector="${OPTARG}"
+      ;;
+    n)
+      namespace="${OPTARG}"
+      ;;
+    r)
+      retries="${OPTARG}"
+      ;;
+    s)
+      sleepDuration="${OPTARG}"
+      ;;
+    "?")
+      panic "Invalid option: -${OPTARG}"
+      ;;
+    esac
+  done
+
+  local testSuccess=1
+  currentPods=$(kubectl get pods -n "${namespace}" --selector "${selector}" -o jsonpath="${jsonPath}")
+  newPods=${currentPods}
+
+  debug "podsShouldNotChange() for ${selector}, max ${retries} retries, namespace: ${namespace}, sleep: ${sleepDuration}"
+
+  completedLoops=0
+
+  info "Checking that pods for ${selector} are not changing"
+
+  while [[ ${completedLoops} -lt ${retries} ]]; do
+    newPods=$(kubectl get pods -n "${namespace}" --selector "${selector}" -o jsonpath="${jsonPath}")
+    debug "Current pods: ${currentPods}, new pods: ${newPods}"
+    completedLoops=$((completedLoops + 1))
+
+    if [ "${newPods}" != "${currentPods}" ]; then
+      testSuccess=0
+      break
+    fi
+
+    debug "Pods for \"${selector}\" are still the same ($((retries - completedLoops)) loops left)"
+    sleep ${sleepDuration}
+  done
+
+  if [[ ${testSuccess} -eq 0 ]]; then
+    panic "Pods for \"${selector}\" did change after ${retries} loops"
   fi
 }
 

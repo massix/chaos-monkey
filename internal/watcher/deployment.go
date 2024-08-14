@@ -62,7 +62,7 @@ func (dw *dwMetrics) unregister() {
 
 var _ = (ConfigurableWatcher)((*DeploymentWatcher)(nil))
 
-func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) ConfigurableWatcher {
+func NewDeploymentWatcher(clientset kubernetes.Interface, recorder record.EventRecorderLogger, deployment *appsv1.Deployment) *DeploymentWatcher {
 	logrus.Infof("Creating new Deployment watcher for %s/%s", deployment.Namespace, deployment.Name)
 
 	// Build my own recorder here

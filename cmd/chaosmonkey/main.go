@@ -8,7 +8,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
+	cmcv "github.com/massix/chaos-monkey/internal/apis/clientset/versioned"
 	"github.com/massix/chaos-monkey/internal/configuration"
 	"github.com/massix/chaos-monkey/internal/endpoints"
 	"github.com/massix/chaos-monkey/internal/watcher"
@@ -16,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 var Version string
@@ -46,9 +47,10 @@ func main() {
 	}
 
 	clientset := kubernetes.NewForConfigOrDie(cfg)
-	cmcClientset := versioned.NewForConfigOrDie(cfg)
+	cmcClientset := cmcv.NewForConfigOrDie(cfg)
+	metricsClientset := versioned.NewForConfigOrDie(cfg)
 
-	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, nil, namespace, conf.Behavior)
+	nsWatcher := watcher.DefaultNamespaceFactory(clientset, cmcClientset, metricsClientset, nil, namespace, conf.Behavior)
 
 	// Hook signals
 	s := make(chan os.Signal, 1)
@@ -63,27 +65,45 @@ func main() {
 	}()
 
 	// Spawn the HTTP Server for Prometheus in background
-	srv := &http.Server{
+	httpServer := &http.Server{
 		Addr: "0.0.0.0:9000",
+	}
+
+	tlsServer := &http.Server{
+		Addr: "0.0.0.0:9443",
 	}
 
 	// Register methods
 	http.Handle("GET /metrics", promhttp.Handler())
 	http.Handle("GET /health", endpoints.NewHealthEndpoint(nsWatcher.(*watcher.NamespaceWatcher)))
 
+	http.Handle("POST /convertcrd", endpoints.NewConversionEndpoint())
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := srv.ListenAndServe(); err != nil {
+		if err := httpServer.ListenAndServe(); err != nil {
 			log.Warnf("Could not spawn http server: %s", err)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := tlsServer.ListenAndServeTLS("./main.crt", "./main.key"); err != nil {
+			log.Errorf("Could not spawn https server: %s", err)
 		}
 	}()
 
 	// Wait for a signal to arrive
 	<-s
 
-	if err := srv.Shutdown(context.Background()); err != nil {
+	if err := httpServer.Shutdown(context.Background()); err != nil {
 		log.Warnf("Could not shutdown http server: %s", err)
+	}
+
+	if err := tlsServer.Shutdown(context.Background()); err != nil {
+		log.Warnf("Could not shutdown https server: %s", err)
 	}
 
 	log.Info("Shutting down...")

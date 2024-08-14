@@ -31,7 +31,7 @@ func TestPodWatcher_Create(t *gtest.T) {
 	clientset := fake.NewSimpleClientset()
 	recorder := record.NewFakeRecorder(1024)
 
-	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
+	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name")
 	if p == nil {
 		t.Fatal("Failed to create pod watcher")
 	}
@@ -56,7 +56,7 @@ func TestPodWatcher_BasicBehaviour(t *gtest.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := fake.NewSimpleClientset()
 	recorder := record.NewFakeRecorder(1024)
-	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
+	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name")
 
 	pause := make(chan interface{})
 	defer close(pause)
@@ -89,8 +89,6 @@ func TestPodWatcher_BasicBehaviour(t *gtest.T) {
 	})
 
 	clientset.PrependReactor("delete", "pods", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
-		t.Logf("Asked to delete %s", action.(ktest.DeleteAction).GetName())
-
 		return true, nil, nil
 	})
 
@@ -161,7 +159,7 @@ func TestPodWatcher_DeletePods(t *gtest.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := fake.NewSimpleClientset()
 	recorder := record.NewFakeRecorder(1024)
-	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
+	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name")
 	fakeWatch := watch.NewFake()
 
 	p.SetTimeout(100 * time.Millisecond)
@@ -190,7 +188,6 @@ func TestPodWatcher_DeletePods(t *gtest.T) {
 
 	clientset.PrependReactor("delete", "pods", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
 		podName := action.(ktest.DeleteAction).GetName()
-		t.Logf("Asked to delete %s", podName)
 
 		// We can delete the first 5 pods, not the other ones
 		switch podName {
@@ -237,7 +234,7 @@ func TestPodWatcher_NotEnabled(t *gtest.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := fake.NewSimpleClientset()
 	recorder := record.NewFakeRecorder(1024)
-	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
+	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name")
 	fakeWatch := watch.NewFake()
 
 	p.SetTimeout(100 * time.Millisecond)
@@ -266,8 +263,6 @@ func TestPodWatcher_NotEnabled(t *gtest.T) {
 
 	clientset.PrependReactor("delete", "pods", func(action ktest.Action) (handled bool, ret runtime.Object, err error) {
 		podName := action.(ktest.DeleteAction).GetName()
-		t.Logf("Asked to delete %s", podName)
-
 		go fakeWatch.Delete(createPod(podName))
 		return true, nil, nil
 	})
@@ -286,7 +281,6 @@ func TestPodWatcher_NotEnabled(t *gtest.T) {
 	<-podsAdded
 	time.Sleep(500 * time.Millisecond)
 
-	t.Log("First batch of assertions")
 	p.Mutex.Lock()
 	// We should still have 10 pods in the list
 	if cnt := len(p.PodList); cnt != 10 {
@@ -295,19 +289,16 @@ func TestPodWatcher_NotEnabled(t *gtest.T) {
 	p.Mutex.Unlock()
 
 	p.SetEnabled(true)
-	t.Log("First batch of assertions over")
 
 	// Wait some more time for the pods to be deleted
 	time.Sleep(1 * time.Second)
 
-	t.Log("Second batch of assertions")
 	p.Mutex.Lock()
 	// We should now have 0 pods in the list
 	if cnt := len(p.PodList); cnt != 0 {
 		t.Errorf("Was expecting 0 pods in the list, got %d instead", cnt)
 	}
 	p.Mutex.Unlock()
-	t.Log("Second batch of assertions over")
 
 	cancel()
 	<-done
@@ -317,7 +308,7 @@ func TestPodWatcher_Restart(t *gtest.T) {
 	logrus.SetLevel(logrus.DebugLevel)
 	clientset := fake.NewSimpleClientset()
 	recorder := record.NewFakeRecorder(1024)
-	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name").(*watcher.PodWatcher)
+	p := watcher.NewPodWatcher(clientset, recorder, "test", "app=name")
 
 	p.SetTimeout(5 * time.Hour)
 	p.SetEnabled(true)

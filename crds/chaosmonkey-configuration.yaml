@@ -5,16 +5,144 @@ metadata:
 spec:
   group: cm.massix.github.io
   scope: Namespaced
+  preserveUnknownFields: false
   names:
     plural: chaosmonkeyconfigurations
     singular: chaosmonkeyconfiguration
     kind: ChaosMonkeyConfiguration
-    shortNames:
-      - cmc
+    shortNames: ["cmc"]
+  conversion:
+    strategy: Webhook
+    webhook:
+      conversionReviewVersions: ["v1"]
+      clientConfig:
+        service:
+          name: chaos-monkey
+          namespace: chaosmonkey
+          port: 443
+          path: /convertcrd
+        caBundle: |-
+          LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZhekNDQTFPZ0F3SUJBZ0lVQlNlbk1mQ295
+          ZWRwb2czWGhZc0lyK3BGYTJFd0RRWUpLb1pJaHZjTkFRRUwKQlFBd1JURUxNQWtHQTFVRUJoTUNS
+          bEl4RXpBUkJnTlZCQWdNQ2xOdmJXVXRVM1JoZEdVeElUQWZCZ05WQkFvTQpHRWx1ZEdWeWJtVjBJ
+          RmRwWkdkcGRITWdVSFI1SUV4MFpEQWVGdzB5TkRBM01qQXhNekUwTURkYUZ3MHlPVEEzCk1Ua3hN
+          ekUwTURkYU1FVXhDekFKQmdOVkJBWVRBa1pTTVJNd0VRWURWUVFJREFwVGIyMWxMVk4wWVhSbE1T
+          RXcKSHdZRFZRUUtEQmhKYm5SbGNtNWxkQ0JYYVdSbmFYUnpJRkIwZVNCTWRHUXdnZ0lpTUEwR0NT
+          cUdTSWIzRFFFQgpBUVVBQTRJQ0R3QXdnZ0lLQW9JQ0FRRENJbkdsZVFScXNiRnFDQ3ZwbTZpb0I1
+          TWJpNHI2UEc2VldmeHpYQmVjClExKzZtbTJZbEN4eGpGWVRpNG9KeGpyV2g3VnYvMzJBSTg1cmln
+          cno5TXM2a1A5OFQvTmgvV1E4aktlU1QyZnkKcVR6NG50VTVTbDd2MldlQXBud3JSRGhWMjg3YU9i
+          YmQ1NG5RQklMSG9Nck90MWpWemxJRUJnc21GK0tocXd2QwpHL0ZvSU83U05mOE9nRkkrNW9kZU1W
+          UklQamR3OWRVMHd2N0pYcWlwRysrQ2pvSG4zZXNjdFJ3TXRhUDFtZ1lWCkRLaXVMNDAyVyt4NUIr
+          R2VPTGpzTExJdks3bGxISk45LzBkS281QVN6MVptMWNsZWszRlNnckU2clQ2bjkwMG8Kcm01TlZx
+          TkpnM2FyYXRNZENjN29ZMjNNMlV6bTU2d0hiKzI2T2Zac0pWMUFnQ1kySDd5b1J6ZUMwRFJVSGhR
+          TAp5UTUyeU11MXVRUm1EWDNLNjlLOXltSGZKd041OVo1N1JUSDRka0QxS0FKTVpyTGRIaUg5RG9t
+          akFZUHFXRlltCk5LMUJRV1dXbytQVEZDeW1BbE5menF1SmZtK01QSlpUTEFPYWJBbUY4U3hGeGxp
+          eVIwUU5NalorR1U2dHhCUi8KWGZKc2VYWWZTbHNQME9qbHZRV1JFTWlFeVNUa0pLN3dQRjMwYmxZ
+          dkM4Vkx0YWQvSnN0eldZcUJSdExGeXFjMgpMOHM2SlVyd053NzI2aUV2YXNKRGxncnIvVkx3aS80
+          ZkM3YnlhQ0k2WHNKMHc4YWdVYS9UZi9JSlpnRUg5RWQ0CnkvMWlKWUkvTi9IS2lpTXpSQ1VtZHNK
+          aXZiZUNBajlGVGJjNHFvUEQvL0YxcFdTckZPa0pVeFM0WUs4cDFoK3QKT3dJREFRQUJvMU13VVRB
+          ZEJnTlZIUTRFRmdRVTNWMVFEamRTUGJrejdSVG9sQWhwaFhtQWcxQXdId1lEVlIwagpCQmd3Rm9B
+          VTNWMVFEamRTUGJrejdSVG9sQWhwaFhtQWcxQXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QU5CZ2tx
+          CmhraUc5dzBCQVFzRkFBT0NBZ0VBQUJuQ3JqS1RMUFVHL0x6cVlVOXZJUzU2SUMxRCtoWUFZMmpL
+          K1VWWnVDeDkKbTF1SGI3ei9XZTFoNWtYNlk3UGhXY0Ixai9XYUdMbU81NlJ3cVBBYk91R3lndHRV
+          WUVMSmhlc2FNN29hMVBtVAo2ZjJEaGp1Nkd6cVRJNis2cU5HU3FKTHdtbUY1U29XMXNrbUtHby9E
+          cDdZQnJuQzRvOGsrenRvZEVpMnRGRUlVCkpBSmVBdUk4ODlsZFl2dmU1NkFPR1Q2bGNqcWdoVnMv
+          emRhTk5kT2U5cTlQRGxEUWZ5Z2ZRYUZtRWJZVlR6OVQKTWR0TlFHSVVqSzEzcW43eWFsNk9yZ01M
+          VHYyTUJJSzVRVWtLMklwYXo2RE9oOEVOK0o4TEdOQS96SC9uclJxKwp2WlNrSEVYZG1HcHRteG5V
+          OCtqOVBHK3djTGViUENiODB1NFFQNXRwZDJkQWI0bGd2STlxZTVYTUVvQTVaU24yClBPOFpVdGw4
+          YVJKU1ZES1grTmxDT2QzQXZSM0xaYjcrRitWc0krOGNxZHlhVjUzSmtSRzYxUkZFZExkMXRqSG8K
+          cjNnTm9ieUlZQXdabkg1eHV3TURidkZmSTBuSTJyYXdVczdLTXJUUmx4dXRrYTJrYmpFOTdDdExJ
+          Qm5YamtjawpsUEtaRHJDZm5INW1naEpLL3F3VzBQY2ErSFBPZ2RxWXpzdzRvNGdVYlllWDh2cXZP
+          UHhudEd4OEhPWE44cTNsCnZvMm0vNzZkRTYzazRqdHZKejRGTmRCa0RqU2xkbktEblB0SVlMTTdZ
+          TXh4YVdPNTc0Ymt3bDJJMnQ3NUlnNVgKdUN1UTQ5dmZpc2pqVm5EbWIreTA0NGZYV0FkeEw0SjRz
+          enVWbFQza2UzRWg1NXVGbkFvY2ZxQlRWOUhvUWZZPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0t
+          Cg==
   versions:
-    - name: v1alpha1
+    - name: v1
       served: true
       storage: true
+      additionalPrinterColumns:
+        - jsonPath: .spec.enabled
+          name: Enabled
+          type: boolean
+        - jsonPath: .spec.scalingMode
+          name: Scaling Mode
+          type: string
+        - jsonPath: .spec.deployment.name
+          name: Target Deployment
+          type: string
+        - jsonPath: .spec.minReplicas
+          name: Min Replicas
+          type: integer
+        - jsonPath: .spec.maxReplicas
+          name: Max Replicas
+          type: integer
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-validations:
+                - rule: "self.minReplicas <= self.maxReplicas"
+                  message: "minReplicas must be less than or equal to maxReplicas"
+              properties:
+                enabled:
+                  type: boolean
+                  description: |
+                    Whether or not this configuration of the ChaosMonkey is enabled or not. Setting this
+                    to `false` will disable the ChaosMonkey, regardless of all other configurations.
+                minReplicas:
+                  type: integer
+                  description: |
+                    When using the "randomScale" or "antiPressure" mode, this sets the minimum amount of
+                    replicas that should exist in the system. This value is ignored if using the "killPod"
+                    scaling mode.
+                  x-kubernetes-validations:
+                    - rule: "self >= 0"
+                      message: "minReplicas must be greater than or equal to 0"
+                maxReplicas:
+                  type: integer
+                  description: |
+                    When using the "randomScale" or "antiPressure" mode, this sets the maximum amount of
+                    replicas that should exist in the system. This value is ignored if using the "killPod"
+                    scaling mode.
+                scalingMode:
+                  type: string
+                  enum: ["randomScale", "antiPressure", "killPod"]
+                  description: |
+                    This sets the behavior of the ChaosMonkey. Currently, three behaviors are supported:
+                    - randomScale: The ChaosMonkey will modify the .spec.replicas value of the targeted
+                      deployment, respecting the `minReplicas` and `maxReplicas` values;
+                    - killPod: The ChaosMonkey will randomly kill pods belonging to the targeted deployment,
+                      this scaling mode won't modify the existing deployment and will ignore the values
+                      set in `minReplicas` and `maxReplicas`;
+                    - antiPressure: The ChaosMonkey will consistently monitor the resources usage of the
+                      pods belonging to the targeted deployment, when the timeout expires, it will choose
+                      the pod which is currently consuming most resources, this should kill your most
+                      active pod in the system. This scaling mode won't modify the existing deployment but
+                      it will respect the `minReplicas` value, avoiding to kill a pod if the system is already
+                      under heavy pressure.
+                deployment:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      description: The name of the targeted deployment.
+                      x-kubernetes-validations:
+                        - rule: "self != ''"
+                          message: "deployment name must not be empty"
+                timeout:
+                  type: string
+                  description: |
+                    The timeout for the ChaosMonkey, everytime the timeout expires, the ChaosMonkey will
+                    be triggered and possibly disrupt the system in some ways. The string *must* respect
+                    the format of Golang's ParseDuration function (e.g. "10m" means every 10 minutes)
+    - name: v1alpha1
+      served: true
+      storage: false
+      deprecated: true
+      deprecationWarning: "cm.massix.github.io/v1alpha1 is now deprecated, please migrate to cm.massix.github.io/v1"
       schema:
         openAPIV3Schema:
           type: object
@@ -67,8 +195,6 @@ spec:
                 lastKnownReplicas:
                   type: integer
                   description: Last known number of replicas
-      subresources:
-        status: {}
       additionalPrinterColumns:
         - name: Enabled
           type: boolean

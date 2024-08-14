@@ -26,7 +26,6 @@ type ChaosMonkeyConfigurationsGetter interface {
 type ChaosMonkeyConfigurationInterface interface {
 	Create(ctx context.Context, chaosMonkeyConfiguration *v1alpha1.ChaosMonkeyConfiguration, opts v1.CreateOptions) (*v1alpha1.ChaosMonkeyConfiguration, error)
 	Update(ctx context.Context, chaosMonkeyConfiguration *v1alpha1.ChaosMonkeyConfiguration, opts v1.UpdateOptions) (*v1alpha1.ChaosMonkeyConfiguration, error)
-	UpdateStatus(ctx context.Context, chaosMonkeyConfiguration *v1alpha1.ChaosMonkeyConfiguration, opts v1.UpdateOptions) (*v1alpha1.ChaosMonkeyConfiguration, error)
 	Delete(ctx context.Context, name string, opts v1.DeleteOptions) error
 	DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error
 	Get(ctx context.Context, name string, opts v1.GetOptions) (*v1alpha1.ChaosMonkeyConfiguration, error)
@@ -115,22 +114,6 @@ func (c *chaosMonkeyConfigurations) Update(ctx context.Context, chaosMonkeyConfi
 		Namespace(c.ns).
 		Resource("chaosmonkeyconfigurations").
 		Name(chaosMonkeyConfiguration.Name).
-		VersionedParams(&opts, scheme.ParameterCodec).
-		Body(chaosMonkeyConfiguration).
-		Do(ctx).
-		Into(result)
-	return
-}
-
-// UpdateStatus was generated because the type contains a Status member.
-// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *chaosMonkeyConfigurations) UpdateStatus(ctx context.Context, chaosMonkeyConfiguration *v1alpha1.ChaosMonkeyConfiguration, opts v1.UpdateOptions) (result *v1alpha1.ChaosMonkeyConfiguration, err error) {
-	result = &v1alpha1.ChaosMonkeyConfiguration{}
-	err = c.client.Put().
-		Namespace(c.ns).
-		Resource("chaosmonkeyconfigurations").
-		Name(chaosMonkeyConfiguration.Name).
-		SubResource("status").
 		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(chaosMonkeyConfiguration).
 		Do(ctx).

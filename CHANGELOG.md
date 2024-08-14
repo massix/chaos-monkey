@@ -2,6 +2,21 @@
 
 
 - - -
+## v3.0.0 - 2024-08-14
+#### Documentation
+- add plans for the future and contributions [ci skip] - (9650c87) - Massimo Gengarelli
+#### Features
+- **(api)** introduce new version of APIs - (1943d55) - Massimo Gengarelli
+- **(watchers)** add antiPressure scaling mode - (14045cd) - Massimo Gengarelli
+#### Miscellaneous Chores
+- bump version - (b6fd62e) - Massimo Gengarelli
+#### Style
+- use interfaces only when needed, prefer concrete types - (e4df99a) - Massimo Gengarelli
+#### Tests
+- **(namespace)** add a couple more tests - (1bcca72) - Massimo Gengarelli
+
+- - -
+
 ## v2.2.0 - 2024-07-16
 #### Bug Fixes
 - **(metrics)** reset the active CMC metric after a reset of the watcher - (2e1f9b0) - Massimo Gengarelli

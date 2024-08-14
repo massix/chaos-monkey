@@ -315,6 +315,11 @@ of kubernetes included in the `client-go` library. The problem is that when test
 with mocks, most of the times you end up testing the mocks and not the code. That's
 the reason why there are also some [integration tests](#integration-tests) included.
 
+For the future, I have plans to completely rewrite the way the tests are run, create
+more _pure_ functions and test those functions in the unit tests, and let the
+[integration tests](#integration-tests) do the rest. If you want to help me out in reaching this goal, feel
+free to open a pull request!
+
 ### Integration Tests
 These tests should cover the basic functionalities of the Chaos Monkey in a local
 Kubernetes cluster. The script file is [here](./tests/kubetest.sh) and before launching
@@ -328,3 +333,6 @@ It should be as easy as launching:
 You can also activate a more verbose logging for the tests with
 
     TEST_DEBUG=true ./tests/kubetest.sh
+
+# Contributions
+All kinds of contributions are welcome, simply open a pull request or an issue!
